@@ -50,6 +50,7 @@ $CoreSuites = @(
     "tests/test_milestone4_performance_and_stability.gd",
     "tests/test_worldbox_overhaul.gd",
     "tests/test_worldbox_complete_parity.gd",
+    "tests/test_worldbox_supreme_blocks_abcd.gd",
     "tests/test_sandbox_suite.gd"
 )
 

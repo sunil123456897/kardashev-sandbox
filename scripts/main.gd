@@ -68,13 +68,29 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	camera.step_camera(delta)
 
+	if sim != null and sim.controlled_actor_id != -1:
+		var move_dir := Vector2.ZERO
+		if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+			move_dir.y -= 1.0
+		if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+			move_dir.y += 1.0
+		if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+			move_dir.x -= 1.0
+		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+			move_dir.x += 1.0
+		var is_firing: bool = Input.is_key_pressed(KEY_SPACE)
+		sim.step_controlled_actor(move_dir, delta, is_firing)
+
 	if _is_painting_power and camera.view_mode == SandboxOrbitCameraScript.ViewMode.MODE_PLANET and hud.selected_power_id != "":
-		_paint_cooldown -= delta
-		if _paint_cooldown <= 0.0:
-			var gp: SandboxAssetScript.GodPowerAsset = sim.assets.god_powers.get(hud.selected_power_id)
-			if gp != null and gp.allow_hold_drag and gp.power_type == "brush_tile":
-				sim.apply_god_power_at_pos(_hovered_world_pos, hud.selected_power_id, hud.current_brush_radius)
-				_paint_cooldown = 0.12
+		if hud.selected_power_id == "power_divine_magnet":
+			sim.apply_divine_magnet_at_pos(_hovered_world_pos, hud.current_brush_radius)
+		else:
+			_paint_cooldown -= delta
+			if _paint_cooldown <= 0.0:
+				var gp: SandboxAssetScript.GodPowerAsset = sim.assets.god_powers.get(hud.selected_power_id)
+				if gp != null and gp.allow_hold_drag and gp.power_type == "brush_tile":
+					sim.apply_god_power_at_pos(_hovered_world_pos, hud.selected_power_id, hud.current_brush_radius)
+					_paint_cooldown = 0.12
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -88,8 +104,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_3:
 				camera.set_view_mode(SandboxOrbitCameraScript.ViewMode.MODE_SYSTEM_OVERVIEW)
 			KEY_SPACE:
-				sim.paused = not sim.paused
-				hud._refresh_telemetry_and_lists()
+				if sim.controlled_actor_id == -1:
+					sim.paused = not sim.paused
+					hud._refresh_telemetry_and_lists()
 			KEY_T:
 				hud.toggle_codex_modal()
 				if audio != null:
@@ -103,7 +120,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				if audio != null:
 					audio.play_ui_sfx("ui_click")
 			KEY_ESCAPE:
-				if hud._active_modal_id != "":
+				if sim.controlled_actor_id != -1:
+					sim.release_possession()
+				elif hud._active_modal_id != "":
 					hud.close_active_modal()
 				else:
 					hud._select_power("")
@@ -137,6 +156,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					_is_pan_dragging = true
 			else:
+				if not sim.magnet_held_actor_ids.is_empty():
+					sim.release_divine_magnet(_hovered_world_pos)
 				if not _dragged_actor.is_empty():
 					var drop_tile: int = sim.find_closest_tile_2d(_hovered_world_pos)
 					_dragged_actor["home_tile"] = drop_tile

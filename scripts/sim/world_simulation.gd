@@ -251,6 +251,24 @@ var _last_colony_time: float = -999.0
 var actors: Array[Dictionary] = []
 const MAX_ACTORS: int = 220
 
+# Блок А–Г: Флот и Порты, Снаряды, Статус-эффекты, Империи, Магнит, Прямое управление, Катаклизмы, Семьи, Религии, Языки, Книги
+var boats: Array[Dictionary] = []
+var projectiles: Array[Dictionary] = []
+var total_projectiles_fired: int = 0
+var whisper_pending_city_id: int = -1
+var total_rebellions_triggered: int = 0
+var magnet_held_actor_ids: Array[int] = []
+var magnet_cursor_pos: Vector2 = Vector2.ZERO
+var controlled_actor_id: int = -1
+var active_clouds: Array[Dictionary] = []
+var active_tornadoes: Array[Dictionary] = []
+var xeno_biomass_tiles: Array[int] = []
+var families_map: Dictionary = {}
+var religions_map: Dictionary = {}
+var languages_map: Dictionary = {}
+var books_list: Array[Dictionary] = []
+
+
 var _next_meta_id: int = 1
 var event_log: Array[Dictionary] = []
 
@@ -293,6 +311,20 @@ func setup_world(seed_val: int = 1337, preserve_codex: bool = false) -> void:
 	active_plots.clear()
 	field_lenses.clear()
 	actors.clear()
+	boats.clear()
+	projectiles.clear()
+	total_projectiles_fired = 0
+	whisper_pending_city_id = -1
+	total_rebellions_triggered = 0
+	magnet_held_actor_ids.clear()
+	controlled_actor_id = -1
+	active_clouds.clear()
+	active_tornadoes.clear()
+	xeno_biomass_tiles.clear()
+	families_map.clear()
+	religions_map.clear()
+	languages_map.clear()
+	books_list.clear()
 	flora_instances.clear()
 	dyson_rings.clear()
 	diplomacy_relations.clear()
@@ -953,6 +985,11 @@ func step_simulation(dt: float) -> void:
 func _substep_simulation(sub_dt: float) -> void:
 	_update_field_lenses(sub_dt)
 	_step_actors(sub_dt)
+	_step_boats(sub_dt)
+	_step_projectiles(sub_dt)
+	_step_actor_status_effects_and_needs(sub_dt)
+	_step_clouds_and_tornadoes(sub_dt)
+	_step_xeno_biomass(sub_dt)
 
 	_diplomacy_timer += sub_dt
 	while _diplomacy_timer >= DIPLOMACY_TICK_INTERVAL:
@@ -1115,7 +1152,9 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 
 	var unit_id: int = _next_meta_id
 	_next_meta_id += 1
-	var max_hp_val: int = 100 + hp_bonus + (45 if role == "general" else 0)
+	var chromo_bonus: Dictionary = get_subspecies_chromosome_bonuses(sp_id)
+	var max_hp_val: int = 100 + hp_bonus + int(chromo_bonus.get("hp_bonus", 0)) + (45 if role == "general" else 0)
+	var fam_info: Dictionary = _assign_actor_family_and_genealogy(unit_id, sp_id, city_id, clan_name)
 	var actor := {
 		"id": unit_id,
 		"name": "%s #%d" % [str(sp.get("name", "Юнит")).split("-")[0], unit_id % 100],
@@ -1144,6 +1183,17 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"level": 2 if role == "general" else 1,
 		"is_favorite": (role == "general"),
 		"clan_name": clan_name,
+		"family_id": int(fam_info.get("family_id", -1)),
+		"family_name": str(fam_info.get("family_name", clan_name)),
+		"parent_a_id": int(fam_info.get("parent_a_id", -1)),
+		"parent_b_id": int(fam_info.get("parent_b_id", -1)),
+		"children_ids": [],
+		"generation": int(fam_info.get("generation", 1)),
+		"nutrition": 92.0,
+		"happiness": 86.0,
+		"stamina": 100.0,
+		"status_effects": {},
+		"is_colossus": false,
 		"hunger": 0.0,
 		"is_fauna": false,
 		"fauna_type": "",
@@ -1851,6 +1901,7 @@ func _spawn_subspecies_at_tile(tile_idx: int, archetype: String) -> int:
 		"is_sapient": is_sapient,
 		"population": 35,
 		"traits": initial_traits,
+		"chromosomes": ["gene_metabolism", "gene_synapse", "gene_fertility"],
 		"home_tile": tile_idx,
 		"biome_origin": t["biome_id"],
 		"color": color_map.get(archetype, Color.AQUA)
@@ -1927,6 +1978,11 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 	}
 	cultures_map[cult_id] = culture_rec
 
+	var lang_id: int = _create_language_for_culture(cult_id, sp["name"])
+	var rel_id: int = _create_religion_for_culture(cult_id, sp["name"], sp["color"])
+	culture_rec["language_id"] = lang_id
+	culture_rec["religion_id"] = rel_id
+
 	var city_id: int = _next_meta_id
 	_next_meta_id += 1
 
@@ -1953,6 +2009,9 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		"name": c_name,
 		"subspecies_id": sp_id,
 		"culture_id": cult_id,
+		"language_id": lang_id,
+		"religion_id": rel_id,
+		"book_ids": [],
 		"center_tile": tile_idx,
 		"map_pos": t["map_pos"],
 		"dir": t["dir"],
@@ -1971,19 +2030,27 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		"color": sp["color"],
 		"ethos_id": assigned_ethos_id,
 		"kingdom_id": city_id,
+		"is_capital": true,
+		"loyalty": 100.0,
+		"has_dock": false,
+		"dock_pos": Vector2.ZERO,
 		"parent_city_id": -1,
 		"internal_cohesion": 0.90,
 		"forged_items_count": 0,
 		"general_actor_id": -1,
 		"council": {
 			"leader_name": "%s-%d" % [sp["name"], city_id],
-			"title": "Архитектор Поля",
+			"title": "Император Доминиона",
 			"trait": assigned_ethos_id,
 			"term_years": 0.0
 		}
 	}
 	_rebuild_city_2d_instances(city_rec)
 	cities_map[city_id] = city_rec
+	_create_kingdom_for_city(city_rec, sp)
+	build_coastal_dock_for_city(city_id)
+	spawn_boat_for_city(city_id, "fishing")
+	write_city_book(city_id)
 
 	for other_id in cities_map.keys():
 		if other_id != city_id:
@@ -3162,6 +3229,60 @@ func _apply_god_power_at_tile_internal(best_tile: int, power_id: String, brush_r
 			shockwave_triggered.emit(center_pos, rad_px, gp.beam_color)
 			_log_event("Печать Избранного благословила %d существ (+Здоровье, +Урон)!" % blessed_cnt, "bless", gp.beam_color)
 
+		"whisper_of_war":
+			var target_c_id: int = int(tiles[best_tile].get("city_id", -1))
+			if target_c_id == -1:
+				var best_cd: float = 999999.0
+				for cid in cities_map.keys():
+					var d_c: float = (cities_map[cid]["map_pos"] as Vector2).distance_to(center_pos)
+					if d_c < best_cd:
+						best_cd = d_c
+						target_c_id = int(cid)
+			if target_c_id != -1:
+				if whisper_pending_city_id == -1 or whisper_pending_city_id == target_c_id or not cities_map.has(whisper_pending_city_id):
+					whisper_pending_city_id = target_c_id
+					result["whisper_stage"] = 1
+					result["city_a_id"] = target_c_id
+					_log_event("Шёпот Войны: выбран полис «%s». Кликните по второму полису, чтобы развязать войну!" % cities_map[target_c_id]["name"], "diplomacy", gp.beam_color)
+				else:
+					var ok_w := whisper_of_war(whisper_pending_city_id, target_c_id)
+					result["whisper_stage"] = 2
+					result["war_started"] = ok_w
+					whisper_pending_city_id = -1
+
+		"inspire_rebellion":
+			var rebel_c_id: int = int(tiles[best_tile].get("city_id", -1))
+			if rebel_c_id == -1 and not cities_map.is_empty():
+				rebel_c_id = int(cities_map.keys()[cities_map.size() - 1])
+			if rebel_c_id != -1:
+				var new_k_id: int = trigger_city_rebellion(rebel_c_id)
+				result["rebel_kingdom_id"] = new_k_id
+
+		"divine_magnet":
+			var moved_cnt: int = apply_divine_magnet_at_pos(center_pos, rad_px)
+			result["magnet_moved_count"] = moved_cnt
+
+		"spawn_colossus":
+			var col_actor: Dictionary = spawn_kardashev_colossus(center_pos)
+			result["colossus_actor_id"] = int(col_actor.get("id", -1))
+
+		"spawn_tornado":
+			var torn: Dictionary = spawn_tornado(center_pos)
+			result["tornado_id"] = int(torn.get("id", -1))
+
+		"earthquake_fault":
+			var fault_px: int = trigger_earthquake_fault(center_pos, rad_px * 1.6)
+			result["fault_pixels"] = fault_px
+
+		"xeno_plague":
+			var infected_cnt: int = spawn_xeno_plague(center_pos, rad_px)
+			result["infected_count"] = infected_cnt
+
+		"spawn_cloud":
+			var cl: Dictionary = spawn_cloud(center_pos, "rain")
+			result["cloud_id"] = int(cl.get("id", -1))
+
+
 	god_impact_triggered.emit(center_dir, rad_norm, gp.beam_color, power_id)
 	god_impact_2d_triggered.emit(center_pos, rad_px, gp.beam_color, power_id)
 	telemetry_updated.emit()
@@ -3751,7 +3872,16 @@ func _step_actor_combat(dt: float) -> void:
 
 			var pos_a: Vector2 = a["pos"]
 			var pos_b: Vector2 = b["pos"]
-			if pos_a.distance_to(pos_b) <= 24.0:
+			var dist_ab: float = pos_a.distance_to(pos_b)
+			var w_a: String = str(a.get("weapon_id", ""))
+			var is_ranged: bool = (w_a == "eq_void_rifle" or w_a == "eq_plasma_lance" or w_a == "eq_laser_blade" or str(a.get("role", "")) == "general" or bool(a.get("is_colossus", false)))
+			if is_ranged and dist_ab > 24.0 and dist_ab <= 155.0:
+				var proj_dmg: int = maxi(6, int(get_actor_combat_damage(a) * 0.75))
+				var proj_col: Color = a.get("color", Color(0.25, 0.95, 1.0))
+				var st_eff: String = "status_burning" if (w_a == "eq_plasma_lance" or (a.get("personal_traits", []) as Array).has("trait_pyromaniac")) else ""
+				spawn_projectile(pos_a, pos_b, proj_dmg, proj_col, st_eff, c_a, int(a["id"]))
+				break
+			elif dist_ab <= 24.0:
 				var raw_dmg: int = get_actor_combat_damage(a) + _rng.randi_range(-2, 4)
 				var def_b: int = get_actor_armor_defense(b)
 				var dmg: int = maxi(5, raw_dmg - def_b)
@@ -3759,6 +3889,7 @@ func _step_actor_combat(dt: float) -> void:
 				b["hp"] = hp_b
 				if (a.get("personal_traits", []) as Array).has("trait_pyromaniac"):
 					ignite_fine_fire(pos_b, 12.0, 4.0)
+					apply_status_effect_to_actor(int(b["id"]), "status_burning", 5.0)
 				var killed: bool = (hp_b <= 0)
 				actor_damaged_or_killed.emit(int(b["id"]), int(a["id"]), "combat" if not killed else "killed_in_combat")
 				if killed:
@@ -3768,6 +3899,7 @@ func _step_actor_combat(dt: float) -> void:
 					if int(a["kills"]) >= 2 and not ptrs_a.has("trait_veteran"):
 						ptrs_a.append("trait_veteran")
 						a["personal_traits"] = ptrs_a
+					_on_actor_family_member_killed(b)
 					capture_enemy_zone_at_pos(c_a, c_b, pos_b)
 					actors.remove_at(idx_b)
 				var victim_k := "war_exhaustion_a" if int(rel["city_a"]) == c_b else "war_exhaustion_b"
@@ -3880,11 +4012,15 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 	t["subspecies_id"] = sp_id
 
 	var assigned_ethos: String = str(mother.get("ethos_id", "ethos_expansionist"))
+	var parent_k_id: int = int(mother.get("kingdom_id", mother_city_id))
 	var city_rec := {
 		"id": new_city_id,
 		"name": c_name,
 		"subspecies_id": sp_id,
 		"culture_id": cult_id,
+		"language_id": int(mother.get("language_id", -1)),
+		"religion_id": int(mother.get("religion_id", -1)),
+		"book_ids": [],
 		"center_tile": tile_idx,
 		"map_pos": t["map_pos"],
 		"dir": t["dir"],
@@ -3902,20 +4038,30 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 		"shielded": false,
 		"color": mother["color"],
 		"ethos_id": assigned_ethos,
-		"kingdom_id": int(mother.get("kingdom_id", mother_city_id)),
+		"kingdom_id": parent_k_id,
+		"is_capital": false,
+		"loyalty": 76.0,
+		"has_dock": false,
+		"dock_pos": Vector2.ZERO,
 		"parent_city_id": mother_city_id,
 		"internal_cohesion": 0.95,
 		"forged_items_count": 0,
 		"general_actor_id": -1,
 		"council": {
 			"leader_name": "Командор-%s" % c_name,
-			"title": "Губернатор Дальней Колонии",
+			"title": "Губернатор Провинции",
 			"trait": assigned_ethos,
 			"term_years": 0.0
 		}
 	}
 	_rebuild_city_2d_instances(city_rec)
 	cities_map[new_city_id] = city_rec
+	if kingdoms_map.has(parent_k_id):
+		var m_cities: Array = kingdoms_map[parent_k_id].get("member_city_ids", [])
+		if not m_cities.has(new_city_id):
+			m_cities.append(new_city_id)
+		kingdoms_map[parent_k_id]["member_city_ids"] = m_cities
+	build_coastal_dock_for_city(new_city_id)
 
 	for _u in range(5):
 		var role_ov: String = "general" if _u == 0 else ""
@@ -3986,6 +4132,19 @@ func get_detailed_city_data(city_id: int) -> Dictionary:
 		"internal_cohesion": c.get("internal_cohesion", 0.9),
 		"parent_city_id": c.get("parent_city_id", -1),
 		"kingdom_id": c.get("kingdom_id", city_id),
+		"kingdom_name": kingdoms_map.get(int(c.get("kingdom_id", city_id)), {}).get("name", c["name"]),
+		"is_capital": bool(c.get("is_capital", true)),
+		"loyalty": compute_city_loyalty(city_id),
+		"has_dock": bool(c.get("has_dock", false)),
+		"dock_pos": c.get("dock_pos", Vector2.ZERO),
+		"boats_count": get_city_boats_count(city_id),
+		"language_id": int(c.get("language_id", -1)),
+		"language_name": languages_map.get(int(c.get("language_id", -1)), {}).get("name", "Прото-Код"),
+		"religion_id": int(c.get("religion_id", -1)),
+		"religion_name": religions_map.get(int(c.get("religion_id", -1)), {}).get("name", "Культ Светила"),
+		"books": get_city_books(city_id),
+		"books_count": get_city_books(city_id).size(),
+		"chromosomes": sp.get("chromosomes", ["gene_metabolism", "gene_synapse", "gene_fertility"]),
 		"center_tile": c["center_tile"],
 		"map_pos": c["map_pos"],
 		"claimed_tiles_count": (c["claimed_tiles"] as Array).size(),
@@ -4030,6 +4189,20 @@ func get_detailed_actor_data(actor_id: int) -> Dictionary:
 				"level": int(a.get("level", 1)),
 				"is_favorite": bool(a.get("is_favorite", false)),
 				"clan_name": str(a.get("clan_name", "")),
+				"family_id": int(a.get("family_id", -1)),
+				"family_name": str(a.get("family_name", a.get("clan_name", "Дом Аксиомы"))),
+				"parent_a_id": int(a.get("parent_a_id", -1)),
+				"parent_b_id": int(a.get("parent_b_id", -1)),
+				"children_ids": a.get("children_ids", []),
+				"children_count": (a.get("children_ids", []) as Array).size(),
+				"generation": int(a.get("generation", 1)),
+				"nutrition": float(a.get("nutrition", 90.0)),
+				"happiness": float(a.get("happiness", 85.0)),
+				"stamina": float(a.get("stamina", 100.0)),
+				"status_effects": a.get("status_effects", {}),
+				"is_colossus": bool(a.get("is_colossus", false)),
+				"is_controlled": (controlled_actor_id == actor_id),
+				"is_possessed": (controlled_actor_id == actor_id),
 				"combat_damage": get_actor_combat_damage(a),
 				"armor_defense": get_actor_armor_defense(a)
 			}
@@ -4078,13 +4251,22 @@ func get_global_world_metrics() -> Dictionary:
 		"active_alliances_count": alliances,
 		"active_fire_count": active_fire_count,
 		"total_items_forged": total_items_forged,
-		"total_zones_captured_in_war": total_zones_captured_in_war
+		"total_zones_captured_in_war": total_zones_captured_in_war,
+		"total_boats": boats.size(),
+		"total_projectiles_fired": total_projectiles_fired,
+		"total_kingdoms": kingdoms_map.size(),
+		"total_rebellions_triggered": total_rebellions_triggered,
+		"total_families": families_map.size(),
+		"total_religions": religions_map.size(),
+		"total_languages": languages_map.size(),
+		"total_books": books_list.size(),
+		"controlled_actor_id": controlled_actor_id
 	}
 
 
 func save_world_to_dict() -> Dictionary:
 	return {
-		"version": 2,
+		"version": 3,
 		"world_seed": world_seed,
 		"world_year": world_year,
 		"chrono_cycle": chrono_cycle,
@@ -4114,6 +4296,12 @@ func save_world_to_dict() -> Dictionary:
 		"subspecies_map": subspecies_map.duplicate(true),
 		"cultures_map": cultures_map.duplicate(true),
 		"cities_map": cities_map.duplicate(true),
+		"kingdoms_map": kingdoms_map.duplicate(true),
+		"families_map": families_map.duplicate(true),
+		"religions_map": religions_map.duplicate(true),
+		"languages_map": languages_map.duplicate(true),
+		"books_list": books_list.duplicate(true),
+		"boats": boats.duplicate(true),
 		"actors": actors.duplicate(true),
 		"diplomacy_relations": diplomacy_relations.duplicate(true),
 		"active_plots": active_plots.duplicate(true),
@@ -4123,6 +4311,8 @@ func save_world_to_dict() -> Dictionary:
 		"field_lenses": field_lenses.duplicate(true),
 		"total_items_forged": total_items_forged,
 		"total_zones_captured_in_war": total_zones_captured_in_war,
+		"total_projectiles_fired": total_projectiles_fired,
+		"total_rebellions_triggered": total_rebellions_triggered,
 		"next_meta_id": _next_meta_id
 	}
 
@@ -4178,6 +4368,16 @@ func load_world_from_dict(state: Dictionary) -> bool:
 	subspecies_map = (state.get("subspecies_map", {}) as Dictionary).duplicate(true)
 	cultures_map = (state.get("cultures_map", {}) as Dictionary).duplicate(true)
 	cities_map = (state.get("cities_map", {}) as Dictionary).duplicate(true)
+	kingdoms_map = (state.get("kingdoms_map", {}) as Dictionary).duplicate(true)
+	families_map = (state.get("families_map", {}) as Dictionary).duplicate(true)
+	religions_map = (state.get("religions_map", {}) as Dictionary).duplicate(true)
+	languages_map = (state.get("languages_map", {}) as Dictionary).duplicate(true)
+	books_list.clear()
+	for bk in state.get("books_list", []):
+		books_list.append((bk as Dictionary).duplicate(true))
+	boats.clear()
+	for bt in state.get("boats", []):
+		boats.append((bt as Dictionary).duplicate(true))
 	diplomacy_relations = (state.get("diplomacy_relations", {}) as Dictionary).duplicate(true)
 	active_plots = (state.get("active_plots", {}) as Dictionary).duplicate(true)
 	active_world_laws = (state.get("active_world_laws", active_world_laws) as Dictionary).duplicate(true)
@@ -4197,6 +4397,8 @@ func load_world_from_dict(state: Dictionary) -> bool:
 
 	total_items_forged = int(state.get("total_items_forged", 0))
 	total_zones_captured_in_war = int(state.get("total_zones_captured_in_war", 0))
+	total_projectiles_fired = int(state.get("total_projectiles_fired", 0))
+	total_rebellions_triggered = int(state.get("total_rebellions_triggered", 0))
 	_next_meta_id = int(state.get("next_meta_id", _next_meta_id))
 
 	request_dirty_rect_update(Rect2i(0, 0, FINE_W, FINE_H))
@@ -4237,4 +4439,852 @@ func load_world_from_slot(slot_id: int) -> bool:
 	if ok:
 		_log_event("Мир загружен из слота #%d (Год %d, Эпоха: %s)." % [slot_id, int(world_year), current_age_id], "load", Color(0.4, 0.9, 1.0))
 	return ok
+
+
+# ==============================================================================
+# БЛОК А: МОРСКАЯ ЛОГИСТИКА (ПОРТЫ И КОРАБЛИ), СНАРЯДЫ И СТАТУС-ЭФФЕКТЫ
+# ==============================================================================
+func build_coastal_dock_for_city(city_id: int) -> bool:
+	if not cities_map.has(city_id):
+		return false
+	var city: Dictionary = cities_map[city_id]
+	if bool(city.get("has_dock", false)):
+		return true
+
+	var c_pos: Vector2 = city["map_pos"]
+	var best_water_pos := Vector2.ZERO
+	var best_d: float = 999999.0
+	for i in range(TILE_COUNT):
+		var t: Dictionary = tiles[i]
+		if float(t["elevation"]) < 0.01:
+			var tp: Vector2 = t["map_pos"]
+			var d: float = tp.distance_to(c_pos)
+			if d < best_d:
+				best_d = d
+				best_water_pos = c_pos.lerp(tp, 0.65)
+	if best_water_pos == Vector2.ZERO:
+		best_water_pos = c_pos + Vector2(36.0, 24.0)
+
+	city["has_dock"] = true
+	city["dock_pos"] = best_water_pos
+	var b_insts: Array = city.get("building_instances", [])
+	b_insts.append({
+		"map_pos": best_water_pos,
+		"dir": city["dir"],
+		"tier": 1,
+		"title": "Морской Порт и Док",
+		"archetype": "shipyard",
+		"is_orbital": false,
+		"color": city["color"],
+		"spawn_spring": 0.15,
+		"hit_shake": 0.0
+	})
+	city["building_instances"] = b_insts
+	city_structures_changed.emit()
+	return true
+
+
+func spawn_boat_for_city(city_id: int, boat_type: String = "fishing") -> Dictionary:
+	if not cities_map.has(city_id) or boats.size() >= 36:
+		return {}
+	var city: Dictionary = cities_map[city_id]
+	if not bool(city.get("has_dock", false)):
+		build_coastal_dock_for_city(city_id)
+	var d_pos: Vector2 = city.get("dock_pos", city["map_pos"] + Vector2(32.0, 20.0))
+	var b_id: int = _next_meta_id
+	_next_meta_id += 1
+	var boat := {
+		"id": b_id,
+		"city_id": city_id,
+		"boat_type": boat_type,
+		"state": "SAILING_OUT",
+		"pos": d_pos,
+		"dock_pos": d_pos,
+		"target_pos": _pick_ocean_target_for_boat(city_id, boat_type, d_pos),
+		"passenger_count": 4 if boat_type == "transport" else 0,
+		"cargo": 0.0,
+		"hp": 120.0,
+		"color": city["color"],
+		"facing_left": false
+	}
+	boats.append(boat)
+	return boat
+
+
+func get_city_boats_count(city_id: int) -> int:
+	var cnt: int = 0
+	for b in boats:
+		if int(b.get("city_id", -1)) == city_id:
+			cnt += 1
+	return cnt
+
+
+func _pick_ocean_target_for_boat(city_id: int, boat_type: String, dock_pos: Vector2) -> Vector2:
+	if boat_type == "trade" or boat_type == "transport":
+		for other_id in cities_map.keys():
+			if int(other_id) != city_id:
+				var o_city: Dictionary = cities_map[other_id]
+				return o_city.get("dock_pos", o_city["map_pos"])
+	for _k in range(12):
+		var rx: float = clampf(dock_pos.x + _rng.randf_range(-220.0, 220.0), 60.0, MAP_PIXEL_W - 60.0)
+		var ry: float = clampf(dock_pos.y + _rng.randf_range(-160.0, 160.0), 90.0, MAP_PIXEL_H - 90.0)
+		var u: float = rx / MAP_PIXEL_W
+		var v: float = ry / MAP_PIXEL_H
+		if sample_elevation_fast(u, v) < -0.01:
+			return Vector2(rx, ry)
+	return (dock_pos + Vector2(90.0, 60.0)).clamp(Vector2(60.0, 90.0), Vector2(MAP_PIXEL_W - 60.0, MAP_PIXEL_H - 90.0))
+
+
+func _step_boats(dt: float) -> void:
+	# Автоматический спуск кораблей у развитых полисов с портом
+	if boats.size() < cities_map.size() * 2 and _rng.randf() < 0.08 * dt:
+		for cid in cities_map.keys():
+			if get_city_boats_count(int(cid)) < 2:
+				var b_t: String = "trade" if get_city_boats_count(int(cid)) == 1 else "fishing"
+				spawn_boat_for_city(int(cid), b_t)
+				break
+
+	for i in range(boats.size() - 1, -1, -1):
+		var b: Dictionary = boats[i]
+		var cid: int = int(b.get("city_id", -1))
+		if not cities_map.has(cid):
+			boats.remove_at(i)
+			continue
+		var pos: Vector2 = b["pos"]
+		var target: Vector2 = b["target_pos"]
+		var diff: Vector2 = target - pos
+		var dist: float = diff.length()
+		var spd: float = 46.0
+		if dist <= 8.0:
+			var st: String = str(b.get("state", "SAILING_OUT"))
+			var city: Dictionary = cities_map[cid]
+			var storage: Dictionary = city.get("storage", {"wood": 20, "minerals": 15, "food": 25})
+			if st == "SAILING_OUT":
+				b["cargo"] = 6.0
+				b["state"] = "RETURNING"
+				b["target_pos"] = b.get("dock_pos", city["map_pos"])
+				if str(b.get("boat_type", "")) == "transport":
+					var enemy_id: int = _get_city_war_enemy(cid)
+					if enemy_id != -1 and cities_map.has(enemy_id):
+						capture_enemy_zone_at_pos(cid, enemy_id, pos)
+			else:
+				storage["food"] = int(storage.get("food", 20)) + 4
+				city["storage"] = storage
+				energy_gw += 2.5 * codex_energy_mult
+				b["cargo"] = 0.0
+				b["state"] = "SAILING_OUT"
+				b["target_pos"] = _pick_ocean_target_for_boat(cid, str(b.get("boat_type", "fishing")), b["dock_pos"])
+		else:
+			var step_v: Vector2 = (diff / dist) * minf(dist, spd * dt)
+			b["pos"] = pos + step_v
+			if absf(step_v.x) > 0.05:
+				b["facing_left"] = step_v.x < 0.0
+
+
+func spawn_projectile(from_pos: Vector2, to_pos: Vector2, damage: int, col: Color = Color(0.25, 0.95, 1.0), status_effect_id: String = "", owner_city_id: int = -1, owner_actor_id: int = -1) -> Dictionary:
+	if projectiles.size() >= 64:
+		projectiles.pop_front()
+	var p_id: int = _next_meta_id
+	_next_meta_id += 1
+	var dist: float = maxf(12.0, from_pos.distance_to(to_pos))
+	var proj := {
+		"id": p_id,
+		"start_pos": from_pos,
+		"from_pos": from_pos,
+		"pos": from_pos,
+		"target_pos": to_pos,
+		"to_pos": to_pos,
+		"progress": 0.0,
+		"speed": clampf(260.0 / dist, 1.4, 4.5),
+		"arc_height": clampf(dist * 0.18, 8.0, 34.0),
+		"damage": damage,
+		"color": col,
+		"status_effect_id": status_effect_id,
+		"owner_city_id": owner_city_id,
+		"owner_actor_id": owner_actor_id
+	}
+	projectiles.append(proj)
+	total_projectiles_fired += 1
+	return proj
+
+
+func _step_projectiles(dt: float) -> void:
+	for i in range(projectiles.size() - 1, -1, -1):
+		var pr: Dictionary = projectiles[i]
+		var prog: float = float(pr.get("progress", 0.0)) + float(pr.get("speed", 2.2)) * dt
+		pr["progress"] = prog
+		var s_pos: Vector2 = pr["start_pos"]
+		var t_pos: Vector2 = pr["target_pos"]
+		pr["pos"] = s_pos.lerp(t_pos, clampf(prog, 0.0, 1.0))
+		if prog >= 1.0:
+			var dmg: int = int(pr.get("damage", 10))
+			var st_id: String = str(pr.get("status_effect_id", ""))
+			var owner_cid: int = int(pr.get("owner_city_id", -1))
+			var best_j: int = -1
+			var best_d: float = 22.0
+			for j in range(actors.size()):
+				var a_cand: Dictionary = actors[j]
+				if int(a_cand.get("city_id", -1)) != owner_cid:
+					var d_cand: float = (a_cand["pos"] as Vector2).distance_to(t_pos)
+					if d_cand <= best_d:
+						best_d = d_cand
+						best_j = j
+			if best_j != -1:
+				var a: Dictionary = actors[best_j]
+				var hp_new: int = maxi(0, int(a.get("hp", 100)) - dmg)
+				a["hp"] = hp_new
+				if st_id != "":
+					apply_status_effect_to_actor(int(a["id"]), st_id, 6.0)
+				if hp_new <= 0:
+					_on_actor_family_member_killed(a)
+					actors.remove_at(best_j)
+			projectiles.remove_at(i)
+
+
+func apply_status_effect_to_actor(actor_id: int, effect_id: String, custom_duration: float = -1.0) -> bool:
+	if assets == null or not assets.status_effects.has(effect_id):
+		return false
+	var se: SandboxAssetScript.StatusEffectAsset = assets.status_effects[effect_id]
+	var dur: float = custom_duration if custom_duration > 0.0 else se.duration
+	for a in actors:
+		if int(a["id"]) == actor_id:
+			var eff_dict: Dictionary = a.get("status_effects", {})
+			eff_dict[effect_id] = dur
+			a["status_effects"] = eff_dict
+			return true
+	return false
+
+
+func _step_actor_status_effects_and_needs(dt: float) -> void:
+	for i in range(actors.size() - 1, -1, -1):
+		if i >= actors.size():
+			continue
+		var a: Dictionary = actors[i]
+		# 1. Физиология: Сытость (Nutrition), Счастье (Happiness), Выносливость (Stamina)
+		var nut: float = clampf(float(a.get("nutrition", 90.0)) - dt * 0.45, 0.0, 100.0)
+		var cid: int = int(a.get("city_id", -1))
+		if nut < 55.0 and cid != -1 and cities_map.has(cid):
+			var st: Dictionary = cities_map[cid].get("storage", {})
+			var food_avail: int = int(st.get("food", 0))
+			if food_avail > 0:
+				st["food"] = food_avail - 1
+				cities_map[cid]["storage"] = st
+				nut = minf(100.0, nut + 38.0)
+				a["happiness"] = minf(100.0, float(a.get("happiness", 85.0)) + 4.0)
+		a["nutrition"] = nut
+		if nut <= 2.0:
+			a["happiness"] = maxf(5.0, float(a.get("happiness", 85.0)) - dt * 2.0)
+
+		# 2. Временные статус-эффекты
+		var effs: Dictionary = a.get("status_effects", {})
+		if not effs.is_empty():
+			var keys := effs.keys()
+			for eid in keys:
+				var rem: float = float(effs[eid]) - dt
+				var se: SandboxAssetScript.StatusEffectAsset = assets.status_effects.get(eid) if assets != null else null
+				if se != null and se.dps != 0.0:
+					var cur_hp: float = float(a.get("hp", 100)) - se.dps * dt
+					a["hp"] = clampi(int(round(cur_hp)), 0, int(a.get("max_hp", 100)))
+				if rem <= 0.0:
+					effs.erase(eid)
+				else:
+					effs[eid] = rem
+			a["status_effects"] = effs
+			if int(a.get("hp", 100)) <= 0:
+				if effs.has("status_infected_xeno"):
+					a["role"] = "xeno_mutant"
+					a["city_id"] = -1
+					a["color"] = Color(0.88, 0.22, 0.95)
+					a["hp"] = 140
+					a["max_hp"] = 140
+					a["status_effects"] = {}
+					a["thought"] = "Ведомый коллективным разумом Ксено-Роя"
+				else:
+					_on_actor_family_member_killed(a)
+					actors.remove_at(i)
+
+
+# ==============================================================================
+# БЛОК Б: ИМПЕРИИ (KINGDOMS VS CITIES), СТОЛИЦЫ, ЛОЯЛЬНОСТЬ, ВОССТАНИЯ И ШЁПОТ ВОЙНЫ
+# ==============================================================================
+func _create_kingdom_for_city(city_rec: Dictionary, sp: Dictionary) -> int:
+	var cid: int = int(city_rec["id"])
+	var k_id: int = cid
+	var mottos := [
+		"«Через тернии к Сфере Дайсона»",
+		"«Квантовый порядок превыше хаоса»",
+		"«Свет Гелиоса вечен»",
+		"«Единство кода и материи»"
+	]
+	var k_rec := {
+		"id": k_id,
+		"name": "Империя %s" % city_rec["name"],
+		"motto": mottos[k_id % mottos.size()],
+		"color": city_rec["color"],
+		"capital_city_id": cid,
+		"emperor_actor_id": int(city_rec.get("general_actor_id", -1)),
+		"member_city_ids": [cid],
+		"religion_id": int(city_rec.get("religion_id", -1)),
+		"language_id": int(city_rec.get("language_id", -1))
+	}
+	kingdoms_map[k_id] = k_rec
+	city_rec["kingdom_id"] = k_id
+	city_rec["is_capital"] = true
+	city_rec["loyalty"] = 100.0
+	return k_id
+
+
+func compute_city_loyalty(city_id: int) -> float:
+	if not cities_map.has(city_id):
+		return 0.0
+	var city: Dictionary = cities_map[city_id]
+	if bool(city.get("is_capital", false)):
+		city["loyalty"] = 100.0
+		return 100.0
+	var k_id: int = int(city.get("kingdom_id", city_id))
+	var cap_id: int = int(kingdoms_map.get(k_id, {}).get("capital_city_id", city_id))
+	var dist_penalty: float = 0.0
+	if cities_map.has(cap_id) and cap_id != city_id:
+		var d: float = (city["map_pos"] as Vector2).distance_to(cities_map[cap_id]["map_pos"])
+		dist_penalty = clampf(d / 32.0, 4.0, 28.0)
+	var cohesion_factor: float = float(city.get("internal_cohesion", 0.9)) * 100.0
+	var age_pen: float = 15.0 if current_age_id == "age_of_ash" else 0.0
+	var book_bonus: float = float((city.get("book_ids", []) as Array).size()) * 4.0
+	var loy: float = clampf(cohesion_factor - dist_penalty - age_pen + book_bonus, 5.0, 100.0)
+	city["loyalty"] = loy
+	return loy
+
+
+func trigger_city_rebellion(city_id: int) -> int:
+	if not cities_map.has(city_id):
+		return -1
+	var city: Dictionary = cities_map[city_id]
+	var old_k_id: int = int(city.get("kingdom_id", -1))
+	var old_cap_id: int = int(kingdoms_map.get(old_k_id, {}).get("capital_city_id", -1))
+	if old_cap_id == city_id or old_cap_id == -1:
+		# Если бунт вызван в столице — откалываем от неё новую мятежную провинцию или меняем режим
+		for other_cid in cities_map.keys():
+			if int(other_cid) != city_id:
+				old_cap_id = int(other_cid)
+				break
+	if kingdoms_map.has(old_k_id):
+		var members: Array = kingdoms_map[old_k_id].get("member_city_ids", [])
+		members.erase(city_id)
+		kingdoms_map[old_k_id]["member_city_ids"] = members
+
+	var new_k_id: int = _next_meta_id
+	_next_meta_id += 1
+	var rebel_col := Color.from_hsv(fmod(city["color"].h + 0.37, 1.0), 0.85, 0.96)
+	city["color"] = rebel_col
+	city["kingdom_id"] = new_k_id
+	city["is_capital"] = true
+	city["loyalty"] = 100.0
+	city["internal_cohesion"] = 0.95
+	kingdoms_map[new_k_id] = {
+		"id": new_k_id,
+		"name": "Свободная Республика %s" % city["name"],
+		"motto": "«Свобода от старой метрополии!»",
+		"color": rebel_col,
+		"capital_city_id": city_id,
+		"emperor_actor_id": int(city.get("general_actor_id", -1)),
+		"member_city_ids": [city_id],
+		"religion_id": int(city.get("religion_id", -1)),
+		"language_id": int(city.get("language_id", -1))
+	}
+	if old_cap_id != -1 and old_cap_id != city_id and cities_map.has(old_cap_id):
+		set_diplomacy_status(city_id, old_cap_id, "WAR")
+	total_rebellions_triggered += 1
+	shockwave_triggered.emit(city["map_pos"], 95.0, Color(1.0, 0.45, 0.15))
+	request_dirty_tiles_update(city.get("claimed_tiles", []))
+	planet_surface_changed.emit()
+	_log_event("ВОССТАНИЕ ПРОТИВ ИМПЕРИИ! Полис «%s» провозгласил независимость («%s») и начал войну!" % [city["name"], kingdoms_map[new_k_id]["name"]], "war", Color(1.0, 0.45, 0.18))
+	return new_k_id
+
+
+func whisper_of_war(city_a_id: int, city_b_id: int) -> bool:
+	if not cities_map.has(city_a_id) or not cities_map.has(city_b_id) or city_a_id == city_b_id:
+		return false
+	set_diplomacy_status(city_a_id, city_b_id, "WAR")
+	var pos_a: Vector2 = cities_map[city_a_id]["map_pos"]
+	var pos_b: Vector2 = cities_map[city_b_id]["map_pos"]
+	shockwave_triggered.emit((pos_a + pos_b) * 0.5, 85.0, Color(1.0, 0.22, 0.22))
+	_log_event("ШЁПОТ ВОЙНЫ: Тайная интрига Архитектора стравила «%s» и «%s» в тотальную войну!" % [cities_map[city_a_id]["name"], cities_map[city_b_id]["name"]], "war", Color(1.0, 0.25, 0.25))
+	return true
+
+
+# ==============================================================================
+# БЛОК В: БОЖЕСТВЕННЫЙ МАГНИТ, УПРАВЛЕНИЕ ЮНИТОМ / МЕХА-КОЛОССОМ, ТОРНАДО И КСЕНО-ЧУМА
+# ==============================================================================
+func apply_divine_magnet_at_pos(world_pos: Vector2, radius_px: float = 95.0) -> int:
+	magnet_cursor_pos = world_pos
+	if magnet_held_actor_ids.is_empty():
+		for a in actors:
+			if (a["pos"] as Vector2).distance_to(world_pos) <= radius_px * 1.4:
+				magnet_held_actor_ids.append(int(a["id"]))
+				if magnet_held_actor_ids.size() >= 20:
+					break
+		if magnet_held_actor_ids.is_empty() and not actors.is_empty():
+			magnet_held_actor_ids.append(int(actors[0]["id"]))
+
+	var moved: int = 0
+	for i in range(actors.size()):
+		var a: Dictionary = actors[i]
+		var aid: int = int(a["id"])
+		if magnet_held_actor_ids.has(aid):
+			var ang: float = float(moved) * (TAU / maxf(1.0, float(magnet_held_actor_ids.size())))
+			var offset := Vector2(cos(ang), sin(ang)) * minf(22.0, float(moved) * 2.5)
+			var dest: Vector2 = (world_pos + offset).clamp(Vector2(24.0, 24.0), Vector2(MAP_PIXEL_W - 24.0, MAP_PIXEL_H - 24.0))
+			a["pos"] = dest
+			a["target_pos"] = dest
+			a["home_tile"] = find_closest_tile_2d(dest)
+			moved += 1
+	return moved
+
+
+func release_divine_magnet(drop_pos: Vector2 = Vector2(-1.0, -1.0)) -> int:
+	if drop_pos.x >= 0.0 and drop_pos.y >= 0.0 and not magnet_held_actor_ids.is_empty():
+		apply_divine_magnet_at_pos(drop_pos, 95.0)
+	var cnt: int = magnet_held_actor_ids.size()
+	magnet_held_actor_ids.clear()
+	return cnt
+
+
+func possess_actor(actor_id: int) -> bool:
+	for a in actors:
+		if int(a["id"]) == actor_id:
+			controlled_actor_id = actor_id
+			a["is_favorite"] = true
+			a["thought"] = "Управляется напрямую Архитектором [WASD]"
+			_log_event("ПРЯМОЕ ВСЕЛЕНИЕ: Вы взяли под управление «%s»! [WASD] — движение, [Пробел] — плазменный луч." % a["name"], "cosmos", Color(0.25, 0.95, 1.0))
+			return true
+	return false
+
+
+func release_possession() -> void:
+	controlled_actor_id = -1
+
+
+func step_controlled_actor(move_dir: Vector2, dt: float, fire_laser: bool = false, aim_pos: Vector2 = Vector2.ZERO) -> bool:
+	if controlled_actor_id == -1:
+		return false
+	for a in actors:
+		if int(a["id"]) == controlled_actor_id:
+			var spd: float = 135.0 if bool(a.get("is_colossus", false)) else 95.0
+			if move_dir.length_squared() > 0.001:
+				var step_v: Vector2 = move_dir.normalized() * spd * dt
+				var new_p: Vector2 = ((a["pos"] as Vector2) + step_v).clamp(Vector2(24.0, 24.0), Vector2(MAP_PIXEL_W - 24.0, MAP_PIXEL_H - 24.0))
+				a["pos"] = new_p
+				a["target_pos"] = new_p
+				a["home_tile"] = find_closest_tile_2d(new_p)
+				a["anim_phase"] = float(a["anim_phase"]) + dt * 14.0
+				if absf(step_v.x) > 0.01:
+					a["facing_left"] = step_v.x < 0.0
+			if fire_laser:
+				var target_p: Vector2 = aim_pos if aim_pos != Vector2.ZERO else ((a["pos"] as Vector2) + Vector2(85.0, 0.0))
+				fire_controlled_unit_laser(target_p)
+			return true
+	controlled_actor_id = -1
+	return false
+
+
+func fire_controlled_unit_laser(target_pos: Vector2) -> Dictionary:
+	for a in actors:
+		if int(a["id"]) == controlled_actor_id:
+			var from_p: Vector2 = a["pos"]
+			var is_col: bool = bool(a.get("is_colossus", false))
+			var dmg: int = 95 if is_col else 38
+			var pr := spawn_projectile(from_p, target_pos, dmg, Color(1.0, 0.32, 0.18) if is_col else Color(0.25, 0.95, 1.0), "status_burning", int(a.get("city_id", -1)), int(a["id"]))
+			if is_col:
+				ignite_fine_fire(target_pos, 24.0, 6.0)
+				damage_city_buildings_in_radius(target_pos, 45.0, 120.0)
+			shockwave_triggered.emit(target_pos, 38.0, Color(1.0, 0.42, 0.18))
+			return pr
+	return {}
+
+
+func spawn_kardashev_colossus(world_pos: Vector2) -> Dictionary:
+	var t_idx: int = find_closest_tile_2d(world_pos)
+	var unit_id: int = _next_meta_id
+	_next_meta_id += 1
+	var colossus := {
+		"id": unit_id,
+		"name": "Меха-Колосс К-Титан #%d" % (unit_id % 100),
+		"subspecies_id": -1,
+		"city_id": -1,
+		"archetype": "cyber_colossus",
+		"role": "colossus",
+		"job_id": "attacker",
+		"job_state": "IDLE",
+		"job_timer": 0.0,
+		"target_flora_idx": -1,
+		"carrying": "",
+		"tool_swing": 0.0,
+		"hit_shake": 0.0,
+		"thought": "Шагает по континенту, излучая аннигиляционные лучи!",
+		"pos": world_pos.clamp(Vector2(36.0, 36.0), Vector2(MAP_PIXEL_W - 36.0, MAP_PIXEL_H - 36.0)),
+		"target_pos": world_pos,
+		"home_tile": t_idx,
+		"age": 1,
+		"hp": 2500,
+		"max_hp": 2500,
+		"personal_traits": ["trait_giant", "trait_immortal", "trait_pyromaniac"],
+		"weapon_id": "eq_void_rifle",
+		"armor_id": "eq_aegis_shield",
+		"kills": 0,
+		"level": 10,
+		"is_favorite": true,
+		"clan_name": "Авангард Архитектора",
+		"family_id": -1,
+		"family_name": "Авангард Архитектора",
+		"parent_a_id": -1,
+		"parent_b_id": -1,
+		"children_ids": [],
+		"generation": 1,
+		"nutrition": 100.0,
+		"happiness": 100.0,
+		"stamina": 100.0,
+		"status_effects": {"status_shielded": 60.0},
+		"is_colossus": true,
+		"hunger": 0.0,
+		"is_fauna": false,
+		"fauna_type": "",
+		"color": Color(1.0, 0.35, 0.18),
+		"anim_phase": 0.0,
+		"wait_timer": 0.0,
+		"facing_left": false
+	}
+	actors.append(colossus)
+	possess_actor(unit_id)
+	shockwave_triggered.emit(world_pos, 110.0, Color(1.0, 0.35, 0.18))
+	_log_event("ПРОБУЖДЕНИЕ КОЛОССА! С орбиты сброшен управляемый «%s» (2500 HP)!" % colossus["name"], "cosmos", Color(1.0, 0.38, 0.18))
+	return colossus
+
+
+func spawn_tornado(world_pos: Vector2, radius_px: float = 48.0, duration: float = 18.0) -> Dictionary:
+	var tid: int = _next_meta_id
+	_next_meta_id += 1
+	var ang: float = _rng.randf() * TAU
+	var torn := {
+		"id": tid,
+		"pos": world_pos,
+		"vel": Vector2(cos(ang), sin(ang)) * 42.0,
+		"radius_px": radius_px,
+		"life": duration,
+		"max_life": duration,
+		"color": Color(0.75, 0.90, 1.0, 0.85)
+	}
+	active_tornadoes.append(torn)
+	_log_event("Атмосферный Вихрь! Над архипелагом сформировался блуждающий Плазменный Торнадо!", "cataclysm", Color(0.75, 0.92, 1.0))
+	return torn
+
+
+func spawn_cloud(world_pos: Vector2, cloud_type: String = "rain", duration: float = 24.0) -> Dictionary:
+	var cid: int = _next_meta_id
+	_next_meta_id += 1
+	var col := Color(0.72, 0.90, 1.0, 0.78)
+	if cloud_type == "acid":
+		col = Color(0.55, 1.0, 0.25, 0.78)
+	elif cloud_type == "nanite":
+		col = Color(0.28, 0.95, 0.95, 0.78)
+	var cl := {
+		"id": cid,
+		"cloud_type": cloud_type,
+		"pos": world_pos,
+		"vel": Vector2(_rng.randf_range(18.0, 32.0), _rng.randf_range(-8.0, 8.0)),
+		"radius_px": 56.0,
+		"life": duration,
+		"color": col
+	}
+	active_clouds.append(cl)
+	return cl
+
+
+func _step_clouds_and_tornadoes(dt: float) -> void:
+	for i in range(active_clouds.size() - 1, -1, -1):
+		var cl: Dictionary = active_clouds[i]
+		var rem: float = float(cl.get("life", 0.0)) - dt
+		if rem <= 0.0:
+			active_clouds.remove_at(i)
+			continue
+		cl["life"] = rem
+		var p: Vector2 = (cl["pos"] as Vector2) + (cl["vel"] as Vector2) * dt
+		cl["pos"] = p
+		if str(cl.get("cloud_type", "rain")) == "rain":
+			if active_fire_count > 0:
+				extinguish_fine_fire(p, float(cl.get("radius_px", 52.0)))
+
+	for i in range(active_tornadoes.size() - 1, -1, -1):
+		var tr: Dictionary = active_tornadoes[i]
+		var rem: float = float(tr.get("life", 0.0)) - dt
+		if rem <= 0.0:
+			active_tornadoes.remove_at(i)
+			continue
+		tr["life"] = rem
+		var p: Vector2 = (tr["pos"] as Vector2) + (tr["vel"] as Vector2) * dt
+		p = p.clamp(Vector2(48.0, 84.0), Vector2(MAP_PIXEL_W - 48.0, MAP_PIXEL_H - 84.0))
+		tr["pos"] = p
+		var rad: float = float(tr.get("radius_px", 48.0))
+		for a in actors:
+			var ap: Vector2 = a["pos"]
+			if ap.distance_to(p) <= rad:
+				var push_dir: Vector2 = (ap - p).normalized()
+				if push_dir.length_squared() < 0.01:
+					push_dir = Vector2(1.0, 0.0)
+				a["pos"] = (ap + push_dir * 95.0 * dt).clamp(Vector2(24.0, 24.0), Vector2(MAP_PIXEL_W - 24.0, MAP_PIXEL_H - 24.0))
+
+
+func trigger_earthquake_fault(world_pos: Vector2, length_px: float = 160.0) -> int:
+	if fine_elevation_delta.size() != FINE_COUNT:
+		fine_elevation_delta.resize(FINE_COUNT)
+	has_fine_elevation_deltas = true
+	var steps: int = clampi(int(length_px / 6.0), 12, 60)
+	var cur_p: Vector2 = world_pos - Vector2(length_px * 0.4, 0.0)
+	var dir_v := Vector2(1.0, _rng.randf_range(-0.45, 0.45)).normalized()
+	var modified_px: int = 0
+	for s in range(steps):
+		var delta_h: float = -0.24 if (s % 3 != 0) else 0.22
+		modified_px += apply_fine_terraforming_brush(cur_p, 16.0, delta_h, false)
+		cur_p += dir_v * 6.0 + Vector2(0.0, _rng.randf_range(-4.0, 4.0))
+	shockwave_triggered.emit(world_pos, length_px * 0.7, Color(0.92, 0.65, 0.32))
+	_log_event("ТЕКТОНИЧЕСКИЙ РАЗЛОМ! Землетрясение раскололо кору (%d микро-тайлов)!" % modified_px, "cataclysm", Color(0.92, 0.65, 0.32))
+	return modified_px
+
+
+func spawn_xeno_plague(world_pos: Vector2, radius_px: float = 85.0) -> int:
+	var best_t: int = find_closest_tile_2d(world_pos)
+	if not xeno_biomass_tiles.has(best_t):
+		xeno_biomass_tiles.append(best_t)
+	tiles[best_t]["biome_id"] = "biome_singularity_swamp"
+	var infected: int = 0
+	for a in actors:
+		if (a["pos"] as Vector2).distance_to(world_pos) <= radius_px * 1.4:
+			if apply_status_effect_to_actor(int(a["id"]), "status_infected_xeno", 14.0):
+				infected += 1
+	if infected == 0 and not actors.is_empty():
+		if apply_status_effect_to_actor(int(actors[0]["id"]), "status_infected_xeno", 14.0):
+			infected = 1
+	request_dirty_tiles_update([best_t])
+	planet_surface_changed.emit()
+	_log_event("КСЕНО-ЧУМА РОЯ! Заражено %d существ, гнездо биомассы пустило корни на тайле #%d!" % [infected, best_t], "cataclysm", Color(0.88, 0.25, 0.95))
+	return infected
+
+
+func _step_xeno_biomass(dt: float) -> void:
+	if xeno_biomass_tiles.is_empty():
+		return
+	if _rng.randf() < 0.08 * dt:
+		var src_t: int = xeno_biomass_tiles[_rng.randi_range(0, xeno_biomass_tiles.size() - 1)]
+		var t_pos: Vector2 = tiles[src_t]["map_pos"]
+		for a in actors:
+			if (a["pos"] as Vector2).distance_to(t_pos) <= 45.0:
+				apply_status_effect_to_actor(int(a["id"]), "status_infected_xeno", 12.0)
+
+
+# ==============================================================================
+# БЛОК Г: СЕМЬИ/РОДОСЛОВНАЯ, ЯЗЫКИ, РЕЛИГИИ, КНИГИ И РЕДАКТОР ХРОМОСОМ
+# ==============================================================================
+func _assign_actor_family_and_genealogy(new_actor_id: int, sp_id: int, city_id: int, clan_name: String) -> Dictionary:
+	var existing_fam_id: int = -1
+	var parent_a: int = -1
+	var parent_b: int = -1
+	var gen_num: int = 1
+	for a in actors:
+		if int(a.get("subspecies_id", -1)) == sp_id and (city_id == -1 or int(a.get("city_id", -1)) == city_id):
+			if parent_a == -1:
+				parent_a = int(a["id"])
+				existing_fam_id = int(a.get("family_id", -1))
+				gen_num = int(a.get("generation", 1)) + 1
+				var ch_a: Array = a.get("children_ids", [])
+				if not ch_a.has(new_actor_id):
+					ch_a.append(new_actor_id)
+				a["children_ids"] = ch_a
+			elif parent_b == -1 and int(a["id"]) != parent_a:
+				parent_b = int(a["id"])
+				var ch_b: Array = a.get("children_ids", [])
+				if not ch_b.has(new_actor_id):
+					ch_b.append(new_actor_id)
+				a["children_ids"] = ch_b
+				break
+
+	if existing_fam_id == -1 or not families_map.has(existing_fam_id):
+		existing_fam_id = _next_meta_id
+		_next_meta_id += 1
+		families_map[existing_fam_id] = {
+			"id": existing_fam_id,
+			"name": clan_name,
+			"subspecies_id": sp_id,
+			"founder_id": new_actor_id,
+			"member_ids": [new_actor_id],
+			"generation_count": 1
+		}
+	else:
+		var fam: Dictionary = families_map[existing_fam_id]
+		var mems: Array = fam.get("member_ids", [])
+		mems.append(new_actor_id)
+		fam["member_ids"] = mems
+		fam["generation_count"] = maxi(int(fam.get("generation_count", 1)), gen_num)
+
+	return {
+		"family_id": existing_fam_id,
+		"family_name": families_map[existing_fam_id]["name"],
+		"parent_a_id": parent_a,
+		"parent_b_id": parent_b,
+		"generation": gen_num
+	}
+
+
+func _on_actor_family_member_killed(victim: Dictionary) -> void:
+	var fam_id: int = int(victim.get("family_id", -1))
+	if fam_id == -1:
+		return
+	for a in actors:
+		if int(a.get("family_id", -2)) == fam_id and int(a["id"]) != int(victim["id"]):
+			a["happiness"] = maxf(10.0, float(a.get("happiness", 85.0)) - 14.0)
+
+
+func _create_language_for_culture(cult_id: int, sp_name: String) -> int:
+	var l_id: int = _next_meta_id
+	_next_meta_id += 1
+	var scripts := ["Гекса-Глифы", "Квантовая Клинопись", "Фотонный Код", "Нейро-Руны"]
+	var base_n: String = sp_name.split("-")[0]
+	languages_map[l_id] = {
+		"id": l_id,
+		"name": "Наречие %s (%s)" % [base_n, scripts[l_id % scripts.size()]],
+		"script_style": scripts[l_id % scripts.size()],
+		"vocabulary_tier": 1,
+		"culture_id": cult_id,
+		"speakers_count": 30
+	}
+	return l_id
+
+
+func _create_religion_for_culture(cult_id: int, sp_name: String, col: Color) -> int:
+	var r_id: int = _next_meta_id
+	_next_meta_id += 1
+	var cults := ["Культ Вечного Гелиоса", "Церковь Квантовой Сингулярности", "Орден Звёздного Ковчега", "Синдикат Светового Разума"]
+	var rites := ["solar_blessing", "quantum_aegis", "crusade_zeal"]
+	religions_map[r_id] = {
+		"id": r_id,
+		"name": "%s (%s)" % [cults[r_id % cults.size()], sp_name.split("-")[0]],
+		"rite_type": rites[r_id % rites.size()],
+		"culture_id": cult_id,
+		"followers_count": 30,
+		"color": col
+	}
+	return r_id
+
+
+func cast_religion_rite(city_id: int) -> Dictionary:
+	if not cities_map.has(city_id):
+		return {"ok": false}
+	var city: Dictionary = cities_map[city_id]
+	var r_id: int = int(city.get("religion_id", -1))
+	var rel: Dictionary = religions_map.get(r_id, {"name": "Культ Светила", "rite_type": "solar_blessing"})
+	var rite_type: String = str(rel.get("rite_type", "solar_blessing"))
+	var affected: int = 0
+	for a in actors:
+		if int(a.get("city_id", -1)) == city_id:
+			a["happiness"] = 100.0
+			a["hp"] = int(a.get("max_hp", 100))
+			if rite_type == "quantum_aegis":
+				apply_status_effect_to_actor(int(a["id"]), "status_shielded", 15.0)
+			else:
+				apply_status_effect_to_actor(int(a["id"]), "status_caffeinated", 12.0)
+			affected += 1
+	city["internal_cohesion"] = minf(1.0, float(city.get("internal_cohesion", 0.9)) + 0.12)
+	shockwave_triggered.emit(city["map_pos"], 75.0, Color(1.0, 0.90, 0.35))
+	_log_event("СВЯЩЕННЫЙ ОБРЯД: В полисе «%s» проведён ритуал «%s» (озарено %d граждан)!" % [city["name"], rel.get("name", ""), affected], "bless", Color(1.0, 0.88, 0.32))
+	return {"ok": true, "rite_type": rite_type, "affected": affected}
+
+
+func write_city_book(city_id: int, custom_title: String = "") -> Dictionary:
+	if not cities_map.has(city_id):
+		return {}
+	var city: Dictionary = cities_map[city_id]
+	var bk_id: int = _next_meta_id
+	_next_meta_id += 1
+	var topics := [
+		["Трактат о Сфере Дайсона", "science", 0.15],
+		["Хроники Имперской Лояльности", "loyalty", 8.0],
+		["Кодекс Фазовых Клинков", "combat", 4.0],
+		["Атлас Квантового Генома", "science", 0.20]
+	]
+	var pick: Array = topics[bk_id % topics.size()]
+	var author_name: String = str(city.get("council", {}).get("leader_name", "Архивариус"))
+	var book := {
+		"id": bk_id,
+		"title": custom_title if custom_title != "" else "%s (Том #%d)" % [pick[0], books_list.size() + 1],
+		"author_name": author_name,
+		"city_id": city_id,
+		"city_name": city["name"],
+		"bonus_type": pick[1],
+		"bonus_val": float(pick[2]),
+		"year_written": int(world_year)
+	}
+	books_list.append(book)
+	var b_ids: Array = city.get("book_ids", [])
+	b_ids.append(bk_id)
+	city["book_ids"] = b_ids
+	if pick[1] == "science":
+		codex_compute_mult += 0.05
+	return book
+
+
+func get_city_books(city_id: int) -> Array[Dictionary]:
+	var res: Array[Dictionary] = []
+	for bk in books_list:
+		if int(bk.get("city_id", -1)) == city_id:
+			res.append(bk)
+	return res
+
+
+func mutate_subspecies_gene(sp_id: int, gene_id: String) -> bool:
+	if not subspecies_map.has(sp_id) or assets == null or not assets.genes.has(gene_id):
+		return false
+	var sp: Dictionary = subspecies_map[sp_id]
+	var chromo: Array = sp.get("chromosomes", [])
+	if chromo.has(gene_id):
+		if chromo.size() > 1:
+			chromo.erase(gene_id)
+	else:
+		if chromo.size() >= 6:
+			chromo.pop_front()
+		chromo.append(gene_id)
+	sp["chromosomes"] = chromo
+	sp["generation"] = int(sp.get("generation", 1)) + 1
+	var bonus: Dictionary = get_subspecies_chromosome_bonuses(sp_id)
+	for a in actors:
+		if int(a.get("subspecies_id", -1)) == sp_id:
+			a["max_hp"] = maxi(80, 100 + int(bonus.get("hp_bonus", 0)))
+			a["hp"] = mini(int(a.get("hp", 100)) + 15, int(a["max_hp"]))
+	return true
+
+
+func get_subspecies_chromosome_bonuses(sp_id: int) -> Dictionary:
+	var hp_b: int = 0
+	var spd_m: float = 1.0
+	var int_b: float = 0.0
+	var synergy_links: int = 0
+	if not subspecies_map.has(sp_id) or assets == null:
+		return {"hp_bonus": 0, "speed_mult": 1.0, "intelligence_bonus": 0.0, "synergy_links": 0}
+	var chromo: Array = subspecies_map[sp_id].get("chromosomes", [])
+	var prev_tag: String = ""
+	for g_id in chromo:
+		var ga: SandboxAssetScript.GeneAsset = assets.genes.get(str(g_id))
+		if ga != null:
+			hp_b += ga.hp_bonus
+			spd_m *= ga.speed_mult
+			int_b += ga.intelligence_bonus
+			if prev_tag != "" and ga.synergy_tag == prev_tag:
+				synergy_links += 1
+				hp_b += 15
+				int_b += 0.25
+			prev_tag = ga.synergy_tag
+	return {
+		"hp_bonus": hp_b,
+		"speed_mult": spd_m,
+		"intelligence_bonus": int_b,
+		"synergy_links": synergy_links
+	}
+
 

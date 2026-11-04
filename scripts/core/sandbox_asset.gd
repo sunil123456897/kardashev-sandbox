@@ -257,4 +257,24 @@ class WorldAgeAsset extends SandboxAsset:
 	var sparks_wildfires: bool = false
 
 
+class StatusEffectAsset extends SandboxAsset:
+	## Временный статус-эффект на существе (реверс-инженеринг StatusEffectLibrary из WorldBox v0.51.2).
+	var duration: float = 8.0
+	var dps: float = 0.0
+	var speed_mult: float = 1.0
+	var defense_bonus: float = 0.0
+	var converts_to_xeno: bool = false
+
+
+class GeneAsset extends SandboxAsset:
+	## Генетический локус хромосомы подвида (реверс-инженеринг Chromosome / GeneAsset из WorldBox v0.51.2).
+	var locus_type: String = "alpha"
+	var hp_bonus: int = 10
+	var speed_mult: float = 1.05
+	var intelligence_bonus: float = 0.25
+	var fertility_mult: float = 1.10
+	var synergy_tag: String = "quantum"
+
+
+
 

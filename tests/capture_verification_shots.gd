@@ -50,9 +50,12 @@ func _init() -> void:
 		sim.step_simulation(1.0)
 		renderer._process(0.08)
 
-	# Запустим пару ракет прямо перед кадром для сочного следа
+	# Запустим пару ракет прямо перед кадром для сочного следа + облако, торнадо и Меха-Колосс К-Титан
 	sim.rocket_launched.emit(center_pos, Color(0.25, 0.95, 1.0), "Нова-Аксиома")
 	sim.rocket_launched.emit(west_pos, Color(1.0, 0.65, 0.2), "Гелиос-Купол")
+	sim.spawn_cloud(west_pos + Vector2(60.0, -30.0), "rain")
+	sim.spawn_tornado(east_pos + Vector2(-50.0, 40.0), 46.0)
+	sim.spawn_kardashev_colossus(center_pos + Vector2(36.0, 18.0))
 	renderer._process(0.15)
 
 	hud.update_tile_scanner(sim.find_closest_tile_2d(center_pos), center_pos)
@@ -109,6 +112,16 @@ func _init() -> void:
 	var img5: Image = root.get_texture().get_image()
 	img5.save_png("E:/Godot_Проекты/1/screenshots/shot_5_world_modal.png")
 	print("Saved shot_5_world_modal.png")
+
+	# Скриншот 6: Инспектор Полиса (Империя, Лояльность, Морской Флот, Религия, Язык, Книги и Хромосомы)
+	var first_cid: int = int(sim.cities_map.keys()[0])
+	sim.write_city_book(first_cid)
+	hud.open_city_inspector(first_cid)
+	for _f in range(6):
+		await process_frame
+	var img6: Image = root.get_texture().get_image()
+	img6.save_png("E:/Godot_Проекты/1/screenshots/shot_6_city_supreme_inspector.png")
+	print("Saved shot_6_city_supreme_inspector.png")
 
 	main_node.free()
 	quit(0)

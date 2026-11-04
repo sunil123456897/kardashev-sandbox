@@ -1089,8 +1089,100 @@ func _populate_city_inspector(city_id: int) -> void:
 
 	_vbox_city_content.add_child(HSeparator.new())
 
+	# 1.5. Империя, Лояльность, Флот, Религия, Язык, Книги и Геном (WorldBox v0.51 Meta-Systems)
+	var sec5_l := Label.new()
+	sec5_l.text = "2. ИМПЕРИЯ, ФЛОТ, РЕЛИГИЯ, КНИГИ И ХРОМОСОМЫ ПОДВИДА"
+	sec5_l.add_theme_font_size_override("font_size", 13)
+	sec5_l.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+	_vbox_city_content.add_child(sec5_l)
+
+	var emp_hb := HBoxContainer.new()
+	emp_hb.add_theme_constant_override("separation", 8)
+	_vbox_city_content.add_child(emp_hb)
+
+	var is_cap: bool = bool(c_data.get("is_capital", false))
+	var emp_lbl := Label.new()
+	emp_lbl.text = "%s Империя: %s | Лояльность: %.0f%% | Верфь: %s (Кораблей: %d)" % [
+		"👑 Столица" if is_cap else "🏛 Провинция",
+		str(c_data.get("kingdom_name", "Свободный Полис")),
+		float(c_data.get("loyalty", 100.0)),
+		"Есть" if bool(c_data.get("has_dock", false)) else "Нет",
+		int(c_data.get("boats_count", 0))
+	]
+	emp_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	emp_hb.add_child(emp_lbl)
+
+	var btn_rebel := Button.new()
+	btn_rebel.text = "⚔ Восстание"
+	btn_rebel.pressed.connect(func() -> void:
+		sim.trigger_city_rebellion(city_id)
+		_populate_city_inspector(city_id)
+	)
+	emp_hb.add_child(btn_rebel)
+
+	var btn_boat := Button.new()
+	btn_boat.text = "⛵ Спустить Корабль"
+	btn_boat.pressed.connect(func() -> void:
+		sim.spawn_boat_for_city(city_id, "trade")
+		_populate_city_inspector(city_id)
+	)
+	emp_hb.add_child(btn_boat)
+
+	var meta_hb := HBoxContainer.new()
+	meta_hb.add_theme_constant_override("separation", 8)
+	_vbox_city_content.add_child(meta_hb)
+
+	var meta_lbl := Label.new()
+	meta_lbl.text = "🗣 Язык: %s | 🛐 Религия: %s | 📖 Книг в библиотеке: %d" % [
+		str(c_data.get("language_name", "Прото-Код")),
+		str(c_data.get("religion_name", "Культ Звезды")),
+		int(c_data.get("books_count", 0))
+	]
+	meta_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	meta_hb.add_child(meta_lbl)
+
+	var btn_rite := Button.new()
+	btn_rite.text = "✨ Обряд"
+	btn_rite.pressed.connect(func() -> void:
+		sim.cast_religion_rite(city_id)
+		_populate_city_inspector(city_id)
+	)
+	meta_hb.add_child(btn_rite)
+
+	var btn_book := Button.new()
+	btn_book.text = "📖 Написать Книгу"
+	btn_book.pressed.connect(func() -> void:
+		sim.write_city_book(city_id)
+		_populate_city_inspector(city_id)
+	)
+	meta_hb.add_child(btn_book)
+
+	var sp_id: int = int(c_data.get("subspecies_id", -1))
+	var chromo: Array = c_data.get("chromosomes", [])
+	var gene_hb := HFlowContainer.new()
+	gene_hb.add_theme_constant_override("h_separation", 6)
+	gene_hb.add_theme_constant_override("v_separation", 4)
+	_vbox_city_content.add_child(gene_hb)
+
+	var gene_lbl := Label.new()
+	gene_lbl.text = "🧬 Хромосомы:"
+	gene_hb.add_child(gene_lbl)
+
+	for g_asset in sim.assets.gene_list:
+		var gid: String = g_asset.id
+		var has_g: bool = chromo.has(gid)
+		var g_btn := Button.new()
+		g_btn.text = "%s%s" % ["✓ " if has_g else "+ ", g_asset.title]
+		g_btn.pressed.connect(func() -> void:
+			sim.mutate_subspecies_gene(sp_id, gid)
+			_populate_city_inspector(city_id)
+		)
+		gene_hb.add_child(g_btn)
+
+	_vbox_city_content.add_child(HSeparator.new())
+
 	var sec2_l := Label.new()
-	sec2_l.text = "2. ИНВЕНТАРЬ ЗДАНИЙ И ПРОЧНОСТЬ СТРУКТУР"
+	sec2_l.text = "3. ИНВЕНТАРЬ ЗДАНИЙ И ПРОЧНОСТЬ СТРУКТУР"
 	sec2_l.add_theme_font_size_override("font_size", 13)
 	sec2_l.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0))
 	_vbox_city_content.add_child(sec2_l)
@@ -1251,6 +1343,18 @@ func _populate_actor_inspector(actor_id: int) -> void:
 	)
 	top_hb.add_child(btn_fav)
 
+	var is_possessed: bool = bool(a_data.get("is_possessed", false))
+	var btn_possess := Button.new()
+	btn_possess.text = "🕹 Отпустить [ESC]" if is_possessed else "🕹 Управлять [WASD]"
+	btn_possess.pressed.connect(func() -> void:
+		if sim.controlled_actor_id == actor_id:
+			sim.release_possession()
+		else:
+			sim.possess_actor(actor_id)
+		_populate_actor_inspector(actor_id)
+	)
+	top_hb.add_child(btn_possess)
+
 	var btn_pan := Button.new()
 	btn_pan.text = "🎯 Найти на карте"
 	var a_pos: Vector2 = a_data.get("pos", Vector2(960, 540))
@@ -1314,6 +1418,38 @@ func _populate_actor_inspector(actor_id: int) -> void:
 	ptr_l.text = "🧬 Личные черты: %s" % (", ".join(ptr_names) if not ptr_names.is_empty() else "Обычный")
 	ptr_l.add_theme_color_override("font_color", Color(0.65, 0.95, 0.75))
 	_vbox_actor_content.add_child(ptr_l)
+
+	var needs_l := Label.new()
+	needs_l.text = "🍞 Сытость: %.0f%% | 😊 Счастье: %.0f%% | ⚡ Выносливость: %.0f%%" % [
+		float(a_data.get("nutrition", 100.0)),
+		float(a_data.get("happiness", 100.0)),
+		float(a_data.get("stamina", 100.0))
+	]
+	needs_l.add_theme_color_override("font_color", Color(0.95, 0.88, 0.55))
+	_vbox_actor_content.add_child(needs_l)
+
+	var fam_l := Label.new()
+	fam_l.text = "👪 Семья: %s | Поколение: #%d | Детей: %d | Родители: %d/%d" % [
+		str(a_data.get("family_name", "—")),
+		int(a_data.get("generation", 1)),
+		int(a_data.get("children_count", 0)),
+		int(a_data.get("parent_a_id", -1)),
+		int(a_data.get("parent_b_id", -1))
+	]
+	fam_l.add_theme_color_override("font_color", Color(0.85, 0.78, 1.0))
+	_vbox_actor_content.add_child(fam_l)
+
+	var st_effs: Dictionary = a_data.get("status_effects", {})
+	var st_titles: Array[String] = []
+	for st_id in st_effs.keys():
+		if sim.assets.status_effects.has(st_id):
+			st_titles.append("%s (%.0fс)" % [sim.assets.status_effects[st_id].title, float(st_effs[st_id])])
+		else:
+			st_titles.append(str(st_id))
+	var st_l := Label.new()
+	st_l.text = "🔥 Статусные эффекты: %s" % (", ".join(st_titles) if not st_titles.is_empty() else "Нет")
+	st_l.add_theme_color_override("font_color", Color(1.0, 0.65, 0.45))
+	_vbox_actor_content.add_child(st_l)
 
 	var c_id: int = int(a_data.get("city_id", -1))
 	var c_hb := HBoxContainer.new()

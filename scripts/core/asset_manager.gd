@@ -77,6 +77,13 @@ var equipment_list: Array[SandboxAssetScript.EquipmentAsset] = []
 var world_ages: Dictionary = {}               # id -> SandboxAssetScript.WorldAgeAsset (EraLibrary / Космические Эпохи)
 var world_age_list: Array[SandboxAssetScript.WorldAgeAsset] = []
 
+var status_effects: Dictionary = {}           # id -> SandboxAssetScript.StatusEffectAsset (StatusEffectLibrary)
+var status_effect_list: Array[SandboxAssetScript.StatusEffectAsset] = []
+
+var genes: Dictionary = {}                    # id -> SandboxAssetScript.GeneAsset (Chromosome / GeneLibrary)
+var gene_list: Array[SandboxAssetScript.GeneAsset] = []
+
+
 
 func _init() -> void:
 	init_all()
@@ -127,6 +134,10 @@ func init_all() -> void:
 	equipment_list.clear()
 	world_ages.clear()
 	world_age_list.clear()
+	status_effects.clear()
+	status_effect_list.clear()
+	genes.clear()
+	gene_list.clear()
 
 	_init_base_tiles()
 	_init_biomes()
@@ -134,6 +145,8 @@ func init_all() -> void:
 	_init_personal_traits()
 	_init_equipments()
 	_init_world_ages()
+	_init_status_effects()
+	_init_genes()
 	_init_subspecies_traits()
 	_init_culture_traits()
 	_init_ethos_traits()
@@ -2270,6 +2283,146 @@ func _init_worldbox_powers() -> void:
 	p_bless.power_type = "bless_units"
 	p_bless.beam_color = Color(1.0, 0.90, 0.32)
 	_add_worldbox_power(p_bless)
+
+	var p_whisper := SandboxAssetScript.GodPowerAsset.new()
+	p_whisper.id = "power_whisper_of_war"
+	p_whisper.title = "Шёпот Войны (Интрига)"
+	p_whisper.description = "Кликните по первому полису, а затем по второму — принудительно развязывает тотальную войну между двумя государствами."
+	p_whisper.tab_id = "life"
+	p_whisper.power_type = "whisper_of_war"
+	p_whisper.allow_hold_drag = false
+	p_whisper.beam_color = Color(1.0, 0.25, 0.25)
+	_add_worldbox_power(p_whisper)
+
+	var p_rebel := SandboxAssetScript.GodPowerAsset.new()
+	p_rebel.id = "power_inspire_rebellion"
+	p_rebel.title = "Искра Сепаратизма (Мятеж)"
+	p_rebel.description = "Обрушивает лояльность провинции и поднимает вооружённое восстание с отделением в независимую Империю."
+	p_rebel.tab_id = "life"
+	p_rebel.power_type = "inspire_rebellion"
+	p_rebel.allow_hold_drag = false
+	p_rebel.beam_color = Color(1.0, 0.52, 0.15)
+	_add_worldbox_power(p_rebel)
+
+	var p_magnet := SandboxAssetScript.GodPowerAsset.new()
+	p_magnet.id = "power_divine_magnet"
+	p_magnet.title = "Божественный Магнит"
+	p_magnet.description = "Захватывает жителей и воинов в радиусе кисти и переносит их курсором на другой остров или прямо в гущу сражения."
+	p_magnet.tab_id = "lenses"
+	p_magnet.power_type = "divine_magnet"
+	p_magnet.allow_hold_drag = true
+	p_magnet.beam_color = Color(0.35, 0.95, 1.0)
+	_add_worldbox_power(p_magnet)
+
+	var p_colossus := SandboxAssetScript.GodPowerAsset.new()
+	p_colossus.id = "power_spawn_colossus"
+	p_colossus.title = "Меха-Колосс «К-Титан» [WASD]"
+	p_colossus.description = "Сбрасывает с орбиты гигантского управляемого Меха-Колосса (2500 HP) и передаёт вам прямое управление [WASD + Пробел]."
+	p_colossus.tab_id = "cosmos"
+	p_colossus.power_type = "spawn_colossus"
+	p_colossus.allow_hold_drag = false
+	p_colossus.beam_color = Color(1.0, 0.32, 0.18)
+	_add_worldbox_power(p_colossus)
+
+	var p_tornado := SandboxAssetScript.GodPowerAsset.new()
+	p_tornado.id = "power_spawn_tornado"
+	p_tornado.title = "Плазменный Торнадо"
+	p_tornado.description = "Порождает живой блуждающий вихрь, который бороздит континенты, разбрасывает юнитов и выжигает почву."
+	p_tornado.tab_id = "alchemy"
+	p_tornado.power_type = "spawn_tornado"
+	p_tornado.allow_hold_drag = false
+	p_tornado.beam_color = Color(0.72, 0.88, 1.0)
+	_add_worldbox_power(p_tornado)
+
+	var p_quake := SandboxAssetScript.GodPowerAsset.new()
+	p_quake.id = "power_earthquake_fault"
+	p_quake.title = "Тектонический Разлом"
+	p_quake.description = "Раскалывает литосферу зигзагообразным разломом: вздымает горные хребты или проваливает сушу в океан."
+	p_quake.tab_id = "alchemy"
+	p_quake.power_type = "earthquake_fault"
+	p_quake.allow_hold_drag = false
+	p_quake.beam_color = Color(0.88, 0.64, 0.35)
+	_add_worldbox_power(p_quake)
+
+	var p_xeno := SandboxAssetScript.GodPowerAsset.new()
+	p_xeno.id = "power_xeno_plague"
+	p_xeno.title = "Рой Ксено-Биомассы (Чума)"
+	p_xeno.description = "Заражает сектор ползучей ксено-биомассой и спорами мутации, превращающими жителей в агрессивных мутантов роя."
+	p_xeno.tab_id = "life"
+	p_xeno.power_type = "xeno_plague"
+	p_xeno.allow_hold_drag = false
+	p_xeno.beam_color = Color(0.82, 0.22, 0.95)
+	_add_worldbox_power(p_xeno)
+
+	var p_cloud := SandboxAssetScript.GodPowerAsset.new()
+	p_cloud.id = "power_spawn_cloud"
+	p_cloud.title = "Синтез Атмосферного Облака"
+	p_cloud.description = "Создаёт дрейфующее дождевое, кислотное или нанитовое облако, орошающее материк по ходу ветра."
+	p_cloud.tab_id = "alchemy"
+	p_cloud.power_type = "spawn_cloud"
+	p_cloud.allow_hold_drag = false
+	p_cloud.beam_color = Color(0.65, 0.92, 1.0)
+	_add_worldbox_power(p_cloud)
+
+
+func _add_status_effect(se: SandboxAssetScript.StatusEffectAsset) -> void:
+	se.index_id = status_effect_list.size()
+	status_effects[se.id] = se
+	status_effect_list.append(se)
+
+
+func _init_status_effects() -> void:
+	var defs := [
+		["status_burning", "Горение", "Термический ожог: наносит урон огнём каждую секунду.", 6.0, 5.0, 1.15, -2.0, false, Color(1.0, 0.42, 0.12)],
+		["status_frozen", "Крио-Заморозка", "Сверхпроводящий холод сковывает движения (-55% скорости).", 8.0, 1.0, 0.45, 2.0, false, Color(0.35, 0.88, 1.0)],
+		["status_irradiated", "Лучевая Мутация", "Актинидное облучение ослабляет ткани и провоцирует мутации.", 10.0, 2.5, 0.85, -1.0, false, Color(0.55, 1.0, 0.22)],
+		["status_shielded", "Энерго-Щит Эгиды", "Силовой купол поглощает входящий урон и ускоряет регенерацию.", 12.0, -3.5, 1.05, 12.0, false, Color(0.25, 0.95, 1.0)],
+		["status_caffeinated", "Нейро-Форсаж", "Гиперускорение синапсов и шага (скорость ×2.1).", 10.0, 0.0, 2.10, 0.0, false, Color(1.0, 0.92, 0.25)],
+		["status_infected_xeno", "Ксено-Инфекция Роя", "Паразитическая спора: пожирает носителя и обращает в ксено-мутанта.", 14.0, 3.5, 0.90, -2.0, true, Color(0.88, 0.22, 0.95)]
+	]
+	for d in defs:
+		var se := SandboxAssetScript.StatusEffectAsset.new()
+		se.id = d[0]
+		se.title = d[1]
+		se.description = d[2]
+		se.duration = float(d[3])
+		se.dps = float(d[4])
+		se.speed_mult = float(d[5])
+		se.defense_bonus = float(d[6])
+		se.converts_to_xeno = bool(d[7])
+		se.color = d[8]
+		_add_status_effect(se)
+
+
+func _add_gene(ga: SandboxAssetScript.GeneAsset) -> void:
+	ga.index_id = gene_list.size()
+	genes[ga.id] = ga
+	gene_list.append(ga)
+
+
+func _init_genes() -> void:
+	var defs := [
+		["gene_metabolism", "Ген: Фото-Метаболизм", "Снижает расход сытости и ускоряет восстановление сил.", "alpha", 15, 1.12, 0.15, 1.15, "solar", Color(1.0, 0.85, 0.25)],
+		["gene_longevity", "Ген: Теломерный Замок", "Увеличивает запас здоровья и продолжительность жизни.", "alpha", 45, 1.00, 0.20, 1.05, "quantum", Color(0.35, 0.95, 0.72)],
+		["gene_synapse", "Ген: Квантовый Синапс", "Резко повышает когнитивный потенциал и генерацию науки.", "beta", 10, 1.08, 0.85, 1.00, "quantum", Color(0.28, 0.88, 1.0)],
+		["gene_carapace", "Ген: Мета-Панцирь", "Укрепляет ткани экзо-решёткой (+60 HP и стойкость к радиации).", "beta", 60, 0.96, 0.05, 1.00, "armor", Color(0.85, 0.55, 0.28)],
+		["gene_fertility", "Ген: Митотический Резонанс", "Ускоряет рождаемость и передачу наследственных черт в семьях.", "omega", 20, 1.05, 0.10, 1.65, "solar", Color(0.95, 0.45, 0.75)],
+		["gene_harmony", "Ген: Ноосферная Эмпатия", "Повышает базовое счастье жителей и лояльность полисов.", "omega", 25, 1.10, 0.45, 1.25, "quantum", Color(0.65, 0.52, 1.0)]
+	]
+	for d in defs:
+		var ga := SandboxAssetScript.GeneAsset.new()
+		ga.id = d[0]
+		ga.title = d[1]
+		ga.description = d[2]
+		ga.locus_type = d[3]
+		ga.hp_bonus = int(d[4])
+		ga.speed_mult = float(d[5])
+		ga.intelligence_bonus = float(d[6])
+		ga.fertility_mult = float(d[7])
+		ga.synergy_tag = d[8]
+		ga.color = d[9]
+		_add_gene(ga)
+
 
 
 

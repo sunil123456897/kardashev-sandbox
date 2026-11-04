@@ -767,6 +767,8 @@ func _sample_and_shade_pixel(px: int, py: int, u: float, v: float, bayer2: Array
 			col = WB_ROAD if ((px + py) % 3 != 0) else WB_ROAD_EDGE
 		elif road_val == 2:
 			col = WB_FIELD if (py % 2 == 0) else WB_FIELD_FURROW
+		elif road_val == 3:
+			col = Color(0.58, 0.14, 0.44) if ((px + py) % 2 == 0) else Color(0.86, 0.24, 0.58)
 		else:
 			var b_asset: SandboxAssetScript.BiomeAsset = sim.assets.biomes.get(biome_id)
 			var low_c: Color = b_asset.base_color_low if b_asset != null else WB_SOIL_LOW
@@ -926,10 +928,14 @@ func _draw_mode_planet_worldbox() -> void:
 			draw_rect(Rect2(wx, wy, 10.0, 3.0), Color(0.72, 0.94, 1.0, 0.28), true)
 
 	# 3. Флора и минералы рендерятся батчем через _mm_flora (MultiMeshInstance2D + worldbox_multimesh.gdshader)
-	# 4. Отрисовка лучей орбитальных лифтов и гравитационных якорей поверх зданий (_mm_buildings)
+	# 4. Отрисовка лучей орбитальных лифтов, гравитационных якорей и прибрежных верфей/пирсов поверх зданий (_mm_buildings)
 	for c_id in sim.cities_map.keys():
 		var city: Dictionary = sim.cities_map[c_id]
 		var c_col: Color = city["color"]
+		if bool(city.get("has_dock", false)):
+			var d_pos: Vector2 = city.get("dock_pos", city["map_pos"])
+			draw_rect(Rect2(d_pos.x - 10.0, d_pos.y - 4.0, 20.0, 8.0), Color(0.45, 0.30, 0.18), true)
+			draw_rect(Rect2(d_pos.x - 8.0, d_pos.y - 2.0, 16.0, 4.0), c_col.lightened(0.25), true)
 		var inst_list: Array = city["building_instances"]
 		for b_inst in inst_list:
 			var b_pos: Vector2 = b_inst["map_pos"]
@@ -937,6 +943,23 @@ func _draw_mode_planet_worldbox() -> void:
 			if arch == "elevator" or arch == "anchor":
 				draw_rect(Rect2(b_pos.x - 2.0, 92.0, 4.0, maxf(0.0, b_pos.y - 92.0)), Color(c_col.r, c_col.g, c_col.b, 0.32), true)
 				draw_rect(Rect2(b_pos.x - 1.0, 92.0, 2.0, maxf(0.0, b_pos.y - 92.0)), Color(0.85, 0.98, 1.0, 0.65), true)
+
+	# 4.1. Морской флот цивилизаций (WorldBox Boats: рыбацкие, торговые и десантные корабли)
+	var boat_tex: ImageTexture = _sprites.get("boat_ship")
+	for b in sim.boats:
+		var bp: Vector2 = b["pos"]
+		var b_col: Color = b.get("color", Color.WHITE)
+		# Пенный кильватерный след на воде
+		var wake_w: float = 10.0 + sin(_anim_time * 6.0 + float(b.get("id", 0))) * 3.0
+		draw_rect(Rect2(bp.x - wake_w * 0.5, bp.y + 4.0, wake_w, 3.0), Color(0.75, 0.96, 1.0, 0.55), true)
+		if boat_tex != null:
+			draw_texture_rect(boat_tex, Rect2(bp.x - 10.0, bp.y - 10.0, 20.0, 16.0), false, Color.WHITE.lerp(b_col.lightened(0.25), 0.55))
+		else:
+			draw_rect(Rect2(bp.x - 7.0, bp.y - 4.0, 14.0, 8.0), b_col, true)
+		if int(b.get("passengers", 0)) > 0:
+			draw_rect(Rect2(bp.x - 2.0, bp.y - 13.0, 4.0, 4.0), Color(1.0, 0.35, 0.25), true)
+		elif int(b.get("cargo_gold", 0)) > 0 or int(b.get("cargo_food", 0)) > 0:
+			draw_rect(Rect2(bp.x - 2.0, bp.y - 13.0, 4.0, 4.0), Color(1.0, 0.88, 0.25), true)
 
 	# 5. Инструменты в руках, переносимые ресурсы (бревна, руда, урожай) и значки профессий над жителями (_mm_actors)
 	for a in sim.actors:
@@ -988,6 +1011,78 @@ func _draw_mode_planet_worldbox() -> void:
 		if bool(a.get("is_favorite", false)):
 			draw_rect(Rect2(a_pos.x - 3.0, a_pos.y - 19.0 + bob_y, 6.0, 6.0), Color(1.0, 0.88, 0.18), true)
 			draw_rect(Rect2(a_pos.x - 1.5, a_pos.y - 17.5 + bob_y, 3.0, 3.0), Color(1.0, 0.98, 0.75), true)
+
+		# 5.1. Отрисовка Меха-Колосса К-Титана (босс 2500 HP)
+		if bool(a.get("is_colossus", false)):
+			var col_tex: ImageTexture = _sprites.get("colossus_mech")
+			if col_tex != null:
+				draw_texture_rect(col_tex, Rect2(a_pos.x - 16.0, a_pos.y - 24.0 + bob_y, 32.0, 32.0), false)
+			var hp_ratio: float = clampf(float(a.get("hp", 2500.0)) / maxf(1.0, float(a.get("max_hp", 2500.0))), 0.0, 1.0)
+			draw_rect(Rect2(a_pos.x - 16.0, a_pos.y - 30.0, 32.0, 4.0), Color(0.05, 0.08, 0.12, 0.9), true)
+			draw_rect(Rect2(a_pos.x - 16.0, a_pos.y - 30.0, 32.0 * hp_ratio, 4.0), Color(0.18, 0.95, 1.0), true)
+
+		# 5.2. Индикатор прямого управления юнитом (WorldBox ControlledUnit / Crabzilla Mode)
+		if int(a.get("id", -1)) == sim.controlled_actor_id:
+			var ring_r: float = 14.0 + sin(_anim_time * 8.0) * 2.5
+			_draw_pixel_circle_outline(a_pos, ring_r, Color(0.18, 1.0, 0.88, 0.95), 2.0)
+			draw_rect(Rect2(a_pos.x - 24.0, a_pos.y - 38.0, 48.0, 11.0), Color(0.03, 0.08, 0.14, 0.88), true)
+
+		# 5.3. Значки активных статусных эффектов над юнитом (StatusEffectAsset)
+		var st_dict: Dictionary = a.get("status_effects", {})
+		if not st_dict.is_empty():
+			var st_i: int = 0
+			for st_id in st_dict.keys():
+				var st_asset: SandboxAssetScript.StatusEffectAsset = sim.assets.status_effects.get(st_id)
+				var st_col: Color = st_asset.color if st_asset != null else Color(1.0, 0.5, 0.2)
+				draw_rect(Rect2(a_pos.x - 6.0 + float(st_i) * 4.5, a_pos.y - 12.0 + bob_y, 3.5, 3.5), st_col, true)
+				st_i += 1
+
+	# 5.4. Дальнобойные снаряды по параболической дуге с тенью на земле (WorldBox ProjectileManager + drawProjectileShadows)
+	for proj in sim.projectiles:
+		var p_from: Vector2 = proj["from_pos"]
+		var p_to: Vector2 = proj["to_pos"]
+		var prog: float = clampf(float(proj.get("progress", 0.0)), 0.0, 1.0)
+		var arc_h: float = float(proj.get("arc_height", 26.0))
+		var p_col: Color = proj.get("color", Color(0.35, 0.95, 1.0))
+		var ground_p: Vector2 = p_from.lerp(p_to, prog)
+		var air_offset_y: float = -sin(prog * PI) * arc_h
+		var air_p: Vector2 = ground_p + Vector2(0.0, air_offset_y)
+		# Тень снаряда на земле
+		draw_rect(Rect2(ground_p.x - 3.0, ground_p.y - 1.5, 6.0, 3.0), Color(0.0, 0.0, 0.0, 0.45), true)
+		# Сам снаряд и плазменный хвост
+		var prev_prog: float = maxf(0.0, prog - 0.08)
+		var prev_air_p: Vector2 = p_from.lerp(p_to, prev_prog) + Vector2(0.0, -sin(prev_prog * PI) * arc_h)
+		draw_line(prev_air_p, air_p, Color(p_col.r, p_col.g, p_col.b, 0.65), 2.0)
+		draw_rect(Rect2(air_p.x - 2.5, air_p.y - 2.5, 5.0, 5.0), p_col.lightened(0.35), true)
+
+	# 5.5. Автономные облака и живые торнадо (WorldBox Clouds & Tornadoes)
+	for cl in sim.active_clouds:
+		var cp: Vector2 = cl["pos"]
+		var cr: float = float(cl.get("radius_px", 44.0))
+		var ctype: String = str(cl.get("cloud_type", "rain"))
+		var c_col := Color(0.85, 0.92, 1.0, 0.55)
+		if ctype == "acid":
+			c_col = Color(0.45, 0.95, 0.28, 0.58)
+		elif ctype == "storm":
+			c_col = Color(0.38, 0.46, 0.62, 0.68)
+		elif ctype == "ash":
+			c_col = Color(0.42, 0.36, 0.34, 0.62)
+		# Мягкая тень облака на земле
+		_draw_pixel_filled_circle(cp + Vector2(8.0, 22.0), cr * 0.75, Color(0.0, 0.0, 0.0, 0.22), 8.0)
+		# Пиксельная гряда облака
+		_draw_pixel_filled_circle(cp, cr * 0.72, c_col, 6.0)
+		_draw_pixel_filled_circle(cp + Vector2(-cr * 0.35, 4.0), cr * 0.52, c_col, 6.0)
+		_draw_pixel_filled_circle(cp + Vector2(cr * 0.35, 4.0), cr * 0.52, c_col, 6.0)
+
+	for tor in sim.active_tornadoes:
+		var tp: Vector2 = tor["pos"]
+		var tr: float = float(tor.get("radius_px", 52.0))
+		for ring_i in range(6):
+			var h_frac: float = float(ring_i) / 5.0
+			var sway_x: float = sin(_anim_time * 9.0 + float(ring_i) * 1.1) * (6.0 + h_frac * 8.0)
+			var ring_pos := tp + Vector2(sway_x, -float(ring_i) * 8.0)
+			var ring_r: float = lerpf(8.0, tr * 0.58, h_frac)
+			_draw_pixel_circle_outline(ring_pos, ring_r, Color(0.72, 0.82, 0.92, 0.78), 3.0)
 
 	# 6. Пиксельные купола-линзы констант (Время ×25, Гравитация 0.1G, Сингулярность)
 	var font: Font = ThemeDB.fallback_font
@@ -1062,7 +1157,8 @@ func _draw_mode_planet_worldbox() -> void:
 			var border_col: Color = Color(1.0, 0.32, 0.32) if cities_in_war.has(c_id) else c_col
 			draw_rect(banner_rect, border_col, false, 1.5)
 			if font != null:
-				var war_prefix: String = "⚔ " if cities_in_war.has(c_id) else "★ "
+				var is_cap: bool = bool(city.get("is_capital", false))
+				var war_prefix: String = "⚔ " if cities_in_war.has(c_id) else ("👑 " if is_cap else "★ ")
 				var label_txt: String = "%s%s [%d] K-%.2f" % [war_prefix, city["name"], int(city["population"]), float(city["kardashev_level"])]
 				draw_string(font, Vector2(banner_rect.position.x + 5.0, banner_rect.position.y + 13.5), label_txt, HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 10.0, 11, c_col.lightened(0.35))
 
@@ -1837,3 +1933,29 @@ func _build_pixel_art_sprites() -> void:
 		"..######..",
 		".........."
 	], {"#": k_out, "1": Color(0.38, 0.34, 0.32), "2": Color(0.58, 0.52, 0.46)})
+
+	_sprites["boat_ship"] = _make_sprite_from_grid([
+		".....##.....",
+		"....#22#....",
+		"...#2232#...",
+		"..#222322#..",
+		"..#222222#..",
+		".....##.....",
+		"#1111331111#",
+		".#11111111#.",
+		"..########..",
+		".ssssssssss."
+	], {"#": k_out, "1": Color(0.55, 0.36, 0.20), "2": Color(0.95, 0.96, 1.0), "3": Color(0.25, 0.90, 1.0), "s": k_shd})
+
+	_sprites["colossus_mech"] = _make_sprite_from_grid([
+		"...######...",
+		"..#144441#..",
+		".#31222213#.",
+		"#3311221133#",
+		"#3112332113#",
+		".#11233211#.",
+		"..#112211#..",
+		"..#11##11#..",
+		".#11#..#11#.",
+		".###....###."
+	], {"#": k_out, "1": Color(0.22, 0.28, 0.38), "2": Color(0.18, 0.95, 1.0), "3": Color(1.0, 0.62, 0.15), "4": Color(1.0, 0.25, 0.25)})
