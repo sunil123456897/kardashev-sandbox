@@ -6,7 +6,7 @@
 - **Node Composition**:
   - `WorldSimulation` (`scripts/sim/world_simulation.gd`): Pure simulation domain model (grid, tiles, actors, cities, diplomacy, megastructures, god powers). Communicates via signals.
   - `CosmicRenderer` (`scripts/render/cosmic_renderer.gd`): 2D pixel-art canvas rendering, dynamic planet texture buffer, actors, structures, orbital sails, particles, and 2D visual effects.
-  - `SandboxOrbitCamera` (`scripts/render/sandbox_orbit_camera.gd`): 2D camera with smooth panning, zoom, deadzone, and target framing.
+  - `SandboxOrbitCamera` (`scripts/render/orbit_camera.gd`): 2D camera with smooth panning, zoom, deadzone, and target framing.
   - `GodHUD` (`scripts/ui/god_hud.gd`): User interface, toolbars, modal inspectors, event logs, time controls, and analytics.
   - `AudioSubsystem` (`scripts/audio/audio_subsystem.gd`): Audio bus manager, procedural SFX synthesizer, and ambient cosmic soundscape.
 - **Data & Asset Layer**:
@@ -62,8 +62,8 @@ Every feature from user requirements and acceptance criteria is cataloged and as
 - `scenes/`: Godot scenes (`main.tscn`)
 - `scripts/core/`: Asset declarations and data structures (`asset_manager.gd`, `sandbox_asset.gd`)
 - `scripts/sim/`: Core simulation logic (`world_simulation.gd`, diplomacy, megastructures)
-- `scripts/render/`: 2D rendering, camera, visual effects (`cosmic_renderer.gd`, `sandbox_orbit_camera.gd`)
+- `scripts/render/`: 2D rendering, camera, visual effects (`cosmic_renderer.gd`, `orbit_camera.gd`)
 - `scripts/audio/`: Sound bus management, procedural audio, SFX playback (`audio_subsystem.gd`)
 - `scripts/ui/`: God HUD, modal inspectors, analytics charts (`god_hud.gd`)
-- `shaders/`: 2D CanvasItem shaders (`dyson_aura.gdshader`, `cosmic_lens.gdshader`)
-- `tests/`: Automated headless test suites (`test_step1_registry.gd`, `test_step2_simulation.gd`, `test_sandbox_suite.gd`, `test_e2e_runner.gd`)
+- `shaders/`: 2D CanvasItem shaders (`dyson_aura.gdshader`, `cosmic_lens.gdshader`, `worldbox_multimesh.gdshader`)
+- `tests/`: Automated headless test suites executed via `run_all_tests.ps1` and `run_test_safe.ps1` (`test_step1_registry.gd`, `test_step2_simulation.gd`, `test_sandbox_suite.gd`, etc.)
