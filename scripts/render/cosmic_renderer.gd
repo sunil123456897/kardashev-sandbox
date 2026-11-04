@@ -331,7 +331,7 @@ func _update_multimeshes(_delta: float) -> void:
 		for c_id in sim.cities_map.keys():
 			var city: Dictionary = sim.cities_map[c_id]
 			var c_col: Color = city["color"]
-			var tint: Color = Color.WHITE.lerp(c_col.lightened(0.35), 0.35)
+			var tint: Color = Color.WHITE.lerp(c_col.lightened(0.40), 0.16)
 			var inst_list: Array = city["building_instances"]
 			for b_inst in inst_list:
 				var b_pos: Vector2 = b_inst["map_pos"]
@@ -725,10 +725,7 @@ func _sample_and_shade_pixel(px: int, py: int, u: float, v: float, bayer2: Array
 
 	var zx: int = clampi(px / sim.ZONE_SIZE, 0, sim.ZONE_W - 1)
 	var zy: int = clampi(py / sim.ZONE_SIZE, 0, sim.ZONE_H - 1)
-	var z_id: int = zy * sim.ZONE_W + zx
-	var city_id: int = int(t00["city_id"])
-	if z_id >= 0 and z_id < sim.zone_city_id.size() and sim.zone_city_id[z_id] != -1:
-		city_id = sim.zone_city_id[z_id]
+	var city_id: int = sim._get_zone_owner(zx, zy)
 
 	# Северный сосед (py - 1) для 2.5D теней уступов и береговой пены в стиле WorldBox
 	var py_n: int = maxi(0, py - 1)
@@ -816,10 +813,10 @@ func _sample_and_shade_pixel(px: int, py: int, u: float, v: float, bayer2: Array
 		elif tier > tier_n and tier >= 3:
 			col = col.lightened(0.14)
 
-	# Чёткие квадратные зоны городов 8×8 тайлов с яркими внешними границами государств (WorldBox TileZone)
+	# Чёткие внешние границы государств без внутренней сетки 8×8 (WorldBox Kingdom Borders)
 	if city_id != -1 and sim.cities_map.has(city_id) and tier >= 2:
 		var c_col: Color = sim.cities_map[city_id]["color"]
-		col = col.lerp(c_col, 0.14)
+		col = col.lerp(c_col, 0.03)
 
 		var lx: int = px % sim.ZONE_SIZE
 		var ly: int = py % sim.ZONE_SIZE
@@ -834,7 +831,7 @@ func _sample_and_shade_pixel(px: int, py: int, u: float, v: float, bayer2: Array
 			is_border = true
 
 		if is_border:
-			col = c_col.lightened(0.32) if ((px + py) % 2 == 0) else c_col.darkened(0.15)
+			col = col.lerp(c_col.lightened(0.28), 0.78) if ((px + py) % 2 == 0) else col.lerp(c_col.darkened(0.12), 0.78)
 
 	# Отрисовка клеточного пожара (WorldBox FireLayer) поверх тайла
 	if fine_idx >= 0 and fine_idx < sim.fine_fire_time.size() and sim.fine_fire_time[fine_idx] > 0.0:
@@ -851,16 +848,16 @@ func compute_non_overlapping_city_banner_rects() -> Dictionary:
 
 	var ids := sim.cities_map.keys()
 	ids.sort()
-	var banner_w: float = 176.0
-	var banner_h: float = 19.0
-	var safe_min := Vector2(268.0, 114.0)
-	var safe_max := Vector2(1652.0 - banner_w, 920.0 - banner_h)
+	var banner_w: float = 136.0
+	var banner_h: float = 16.0
+	var safe_min := Vector2(180.0, 96.0)
+	var safe_max := Vector2(1740.0 - banner_w, 920.0 - banner_h)
 
 	for cid in ids:
 		var c: Dictionary = sim.cities_map[cid]
 		var c_pos: Vector2 = c["map_pos"]
 		var bx: float = clampf(c_pos.x - banner_w * 0.5, safe_min.x, safe_max.x)
-		var by: float = clampf(c_pos.y - 36.0, safe_min.y, safe_max.y)
+		var by: float = clampf(c_pos.y - 32.0, safe_min.y, safe_max.y)
 		result[cid] = Rect2(bx, by, banner_w, banner_h)
 
 	# Итеративное разведение пересекающихся табличек полисов, чтобы они никогда не налезали друг на друга
@@ -928,10 +925,18 @@ func _draw_mode_planet_worldbox() -> void:
 			draw_rect(Rect2(wx, wy, 10.0, 3.0), Color(0.72, 0.94, 1.0, 0.28), true)
 
 	# 3. Флора и минералы рендерятся батчем через _mm_flora (MultiMeshInstance2D + worldbox_multimesh.gdshader)
-	# 4. Отрисовка лучей орбитальных лифтов, гравитационных якорей и прибрежных верфей/пирсов поверх зданий (_mm_buildings)
+	# 4. Племенные костры (WorldBox Bonfire), ветряные мельницы (Windmill), пирсы и компактные маяки поверх зданий (_mm_buildings)
 	for c_id in sim.cities_map.keys():
 		var city: Dictionary = sim.cities_map[c_id]
 		var c_col: Color = city["color"]
+		var c_center: Vector2 = city["map_pos"]
+		# Племенной костёр (WorldBox Bonfire) с мерцающим пламенем на главной площади каждого поселения
+		var fire_p: Vector2 = c_center + Vector2(7.0, 4.0)
+		var f_flicker: float = sin(_anim_time * 11.0 + float(c_id) * 1.7) * 1.5
+		draw_rect(Rect2(fire_p.x - 4.0, fire_p.y + 1.0, 8.0, 3.0), Color(0.42, 0.25, 0.12), true)
+		draw_rect(Rect2(fire_p.x - 3.0, fire_p.y - 4.0 - absf(f_flicker), 6.0, 5.0 + absf(f_flicker)), Color(1.0, 0.45, 0.08, 0.95), true)
+		draw_rect(Rect2(fire_p.x - 1.5, fire_p.y - 3.0 - absf(f_flicker) * 0.6, 3.0, 3.5), Color(1.0, 0.92, 0.28, 0.98), true)
+
 		if bool(city.get("has_dock", false)):
 			var d_pos: Vector2 = city.get("dock_pos", city["map_pos"])
 			draw_rect(Rect2(d_pos.x - 10.0, d_pos.y - 4.0, 20.0, 8.0), Color(0.45, 0.30, 0.18), true)
@@ -940,9 +945,18 @@ func _draw_mode_planet_worldbox() -> void:
 		for b_inst in inst_list:
 			var b_pos: Vector2 = b_inst["map_pos"]
 			var arch: String = b_inst["archetype"]
-			if arch == "elevator" or arch == "anchor":
-				draw_rect(Rect2(b_pos.x - 2.0, 92.0, 4.0, maxf(0.0, b_pos.y - 92.0)), Color(c_col.r, c_col.g, c_col.b, 0.32), true)
-				draw_rect(Rect2(b_pos.x - 1.0, 92.0, 2.0, maxf(0.0, b_pos.y - 92.0)), Color(0.85, 0.98, 1.0, 0.65), true)
+			if arch == "extractor":
+				# Вращающиеся лопасти ветряной мельницы / гео-ротора (WorldBox Windmill)
+				var hub: Vector2 = b_pos + Vector2(0.0, -7.0)
+				var ang_w: float = _anim_time * 2.4 + float(c_id)
+				for blade_i in range(4):
+					var ba: float = ang_w + float(blade_i) * (PI * 0.5)
+					var tip: Vector2 = hub + Vector2(cos(ba), sin(ba)) * 6.5
+					draw_line(hub, tip, Color(0.95, 0.90, 0.78, 0.92), 1.6)
+			elif arch == "elevator" or arch == "anchor":
+				# Компактное энергетическое кольцо на вершине шпиля без перекрытия всей карты вертикальными полосами
+				var top_p: Vector2 = b_pos + Vector2(0.0, -11.0)
+				draw_rect(Rect2(top_p.x - 3.0, top_p.y - 2.0, 6.0, 4.0), Color(0.45, 0.95, 1.0, 0.85), true)
 
 	# 4.1. Морской флот цивилизаций (WorldBox Boats: рыбацкие, торговые и десантные корабли)
 	var boat_tex: ImageTexture = _sprites.get("boat_ship")
@@ -1027,7 +1041,15 @@ func _draw_mode_planet_worldbox() -> void:
 			_draw_pixel_circle_outline(a_pos, ring_r, Color(0.18, 1.0, 0.88, 0.95), 2.0)
 			draw_rect(Rect2(a_pos.x - 24.0, a_pos.y - 38.0, 48.0, 11.0), Color(0.03, 0.08, 0.14, 0.88), true)
 
-		# 5.3. Значки активных статусных эффектов над юнитом (StatusEffectAsset)
+		# 5.3. Значки активных статусных эффектов и облачка диалогов (WorldBox Speech Bubbles) над юнитом
+		if float(a.get("chat_timer", 0.0)) > 0.0:
+			var bx: float = a_pos.x - 4.5
+			var by: float = a_pos.y - 16.0 + bob_y
+			draw_rect(Rect2(bx - 1.0, by - 1.0, 11.0, 7.0), Color(0.10, 0.12, 0.16, 0.92), true)
+			draw_rect(Rect2(bx, by, 9.0, 5.0), Color(0.98, 0.98, 0.96, 0.96), true)
+			draw_rect(Rect2(bx + 2.0, by + 2.0, 1.5, 1.5), Color(0.20, 0.24, 0.32), true)
+			draw_rect(Rect2(bx + 5.0, by + 2.0, 1.5, 1.5), Color(0.20, 0.24, 0.32), true)
+
 		var st_dict: Dictionary = a.get("status_effects", {})
 		if not st_dict.is_empty():
 			var st_i: int = 0
@@ -1149,18 +1171,18 @@ func _draw_mode_planet_worldbox() -> void:
 			var city: Dictionary = sim.cities_map[c_id]
 			var c_pos: Vector2 = city["map_pos"]
 			var c_col: Color = city["color"]
-			var banner_rect: Rect2 = banner_rects.get(c_id, Rect2(c_pos.x - 88.0, c_pos.y - 36.0, 176.0, 19.0))
+			var banner_rect: Rect2 = banner_rects.get(c_id, Rect2(c_pos.x - 68.0, c_pos.y - 32.0, 136.0, 16.0))
 			var b_center: Vector2 = banner_rect.get_center()
-			if b_center.distance_to(c_pos + Vector2(0.0, -26.0)) > 18.0:
+			if b_center.distance_to(c_pos + Vector2(0.0, -24.0)) > 18.0:
 				draw_line(Vector2(b_center.x, banner_rect.end.y), c_pos, Color(c_col.r, c_col.g, c_col.b, 0.55), 1.2)
-			draw_rect(banner_rect, Color(0.04, 0.06, 0.11, 0.88), true)
+			draw_rect(banner_rect, Color(0.06, 0.08, 0.12, 0.82), true)
 			var border_col: Color = Color(1.0, 0.32, 0.32) if cities_in_war.has(c_id) else c_col
-			draw_rect(banner_rect, border_col, false, 1.5)
+			draw_rect(banner_rect, border_col, false, 1.2)
 			if font != null:
 				var is_cap: bool = bool(city.get("is_capital", false))
 				var war_prefix: String = "⚔ " if cities_in_war.has(c_id) else ("👑 " if is_cap else "★ ")
-				var label_txt: String = "%s%s [%d] K-%.2f" % [war_prefix, city["name"], int(city["population"]), float(city["kardashev_level"])]
-				draw_string(font, Vector2(banner_rect.position.x + 5.0, banner_rect.position.y + 13.5), label_txt, HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 10.0, 11, c_col.lightened(0.35))
+				var label_txt: String = "%s%s [%d]" % [war_prefix, city["name"], int(city["population"])]
+				draw_string(font, Vector2(banner_rect.position.x + 4.0, banner_rect.position.y + 12.0), label_txt, HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 8.0, 10, c_col.lightened(0.38))
 
 	# 7.2. Активные 2D ударные волны катаклизмов
 	for sw in _active_shockwaves:
@@ -1201,38 +1223,10 @@ func _draw_mode_planet_worldbox() -> void:
 		draw_rect(Rect2(_brush_pos_2d.x - 1.0, _brush_pos_2d.y - 6.0, 2.0, 12.0), _brush_color, true)
 
 
-func _draw_top_orbital_strip(font: Font) -> void:
-	# Компактное окно орбиты прямо над архипелагом (x: 375..1525, y: 74..106), куда долетают ракеты с космодромов
-	var strip_rect := Rect2(375.0, 74.0, 1150.0, 32.0)
-	draw_rect(strip_rect, Color(0.02, 0.03, 0.07, 0.88), true)
-	draw_rect(strip_rect, Color(0.22, 0.52, 0.78, 0.75), false, 1.0)
-
-	# Мини-звезда и вращающиеся паруса справа на орбитальной полосе (не перекрывают текст слева)
-	var star_p := Vector2(1345.0, 90.0)
-	draw_circle(star_p, 11.0, sim.star_color.darkened(0.15))
-	draw_circle(star_p, 8.0, sim.star_color.lightened(0.25))
-
-	var sail_tex: ImageTexture = _sprites.get("dyson_sail")
-	var vis_sails: int = mini(sim.total_dyson_sails, 40)
-	for i in range(vis_sails):
-		var phase: float = _anim_time * 1.4 + float(i) * (TAU / maxf(1.0, float(vis_sails)))
-		var sx: float = star_p.x + cos(phase) * (28.0 + float(i % 5) * 26.0)
-		var sy: float = star_p.y + sin(phase * 2.0) * 8.0
-		if sail_tex != null:
-			draw_texture_rect(sail_tex, Rect2(sx - 5.0, sy - 5.0, 10.0, 10.0), false)
-
-	if font != null:
-		draw_string(
-			font,
-			Vector2(388.0, 94.0),
-			"ОРБИТА СИСТЕМЫ: Парусов Дайсона: %d (Покрытие: %.0f%%) — Нажмите [2:Сфера 2D] или [3:Система 2D]" % [
-				sim.total_dyson_sails, sim.get_dyson_eclipse_ratio() * 100.0
-			],
-			HORIZONTAL_ALIGNMENT_LEFT,
-			780.0,
-			11,
-			Color(0.78, 0.92, 1.0)
-		)
+func _draw_top_orbital_strip(_font: Font) -> void:
+	# В режиме Карты Планеты (view_mode == 0) не перекрываем северный океан тёмной полосой:
+	# вся телеметрия Сферы Дайсона уже выведена в верхней шапке и во вкладках [2: Сфера 2D] / [3: Система 2D].
+	return
 
 
 func _draw_mode_star_dyson_2d() -> void:
@@ -1756,25 +1750,29 @@ func _build_pixel_art_sprites() -> void:
 		flora_atlas_keys.append("flora_" + ft)
 	_atlas_flora_tex = _pack_horizontal_atlas(flora_atlas_keys, 10, 10)
 
-	# --- 3. ПИКСЕЛЬНЫЕ ЗДАНИЯ ГОРОДОВ (12×12 с яркими окнами, куполами и тенью) ---
+	# --- 3. ПИКСЕЛЬНЫЕ ЗДАНИЯ ГОРОДОВ (12×12 с тёплыми черепичными крышами WorldBox, каменными стенами и светящимися окнами) ---
 	var b_pal := {
 		"#": k_out,
-		"1": Color(0.58, 0.68, 0.82),
-		"2": Color(0.88, 0.95, 1.0),
+		"r": Color(0.88, 0.33, 0.20), # Терракотовая черепица (WorldBox Red Roof #E05534)
+		"R": Color(0.96, 0.49, 0.29), # Светлый блик черепицы (#F57C4A)
+		"w": Color(0.94, 0.90, 0.81), # Тёплая каменная/белёная стена дома (#EFE5CF)
+		"d": Color(0.36, 0.23, 0.13), # Деревянная дверь и балки (#5C3A21)
+		"1": Color(0.76, 0.71, 0.62),
+		"2": Color(0.92, 0.94, 0.98),
 		"3": Color(0.22, 0.95, 1.0),
-		"4": Color(1.0, 0.82, 0.25),
+		"4": Color(1.0, 0.89, 0.37),
 		"s": k_shd
 	}
 	_sprites["bld_dome"] = _make_sprite_from_grid([
 		"....####....",
-		"..##2222##..",
-		".#22333322#.",
-		"#2332222332#",
-		"#1223333221#",
-		"#1112222111#",
-		"#1144114411#",
-		"#1144114411#",
+		"..##RRRR##..",
+		".#RRrrrrRR#.",
+		"#rrrrrrrrrr#",
 		"############",
+		".#ww44ww44#.",
+		".#ww44dd44#.",
+		".#wwwwddww#.",
+		".##########.",
 		".ssssssssss.",
 		"............",
 		"............"
@@ -1782,32 +1780,32 @@ func _build_pixel_art_sprites() -> void:
 
 	_sprites["bld_extractor"] = _make_sprite_from_grid([
 		"....####....",
-		"...#4444#...",
-		"..#113311#..",
-		"..#113311#..",
-		".##111111##.",
-		"#1411331141#",
-		"#1411331141#",
-		"#1111111111#",
+		"...#RRRR#...",
+		"..#RrrrrR#..",
+		".#rrrrrrrr#.",
 		"############",
-		".sss#11#sss.",
-		".....##.....",
+		".#1w44ww1w#.",
+		".#1w44dd1w#.",
+		".#11wwww11#.",
+		".##########.",
+		".ssssssssss.",
+		"............",
 		"............"
 	], b_pal)
 
 	_sprites["bld_spire"] = _make_sprite_from_grid([
-		".....##.....",
-		"....#33#....",
-		"....#33#....",
-		"...#2332#...",
-		"...#1221#...",
-		"..#113311#..",
-		"..#113311#..",
-		".#11233211#.",
-		".#11122111#.",
-		"#1144114411#",
+		"....####....",
+		"...#RRRR#...",
+		"..#RrrrrR#..",
+		"..########..",
+		"..#ww44ww#..",
+		".##wwwwww##.",
+		"#RRrrrrrrRR#",
+		"#ww44dd44ww#",
+		"#wwwwddwwww#",
 		"############",
-		".ssssssssss."
+		".ssssssssss.",
+		"............"
 	], b_pal)
 
 	_sprites["bld_collider"] = _make_sprite_from_grid([

@@ -267,6 +267,8 @@ var families_map: Dictionary = {}
 var religions_map: Dictionary = {}
 var languages_map: Dictionary = {}
 var books_list: Array[Dictionary] = []
+var total_fires_extinguished_by_water: int = 0
+var total_social_chats: int = 0
 
 
 var _next_meta_id: int = 1
@@ -325,6 +327,8 @@ func setup_world(seed_val: int = 1337, preserve_codex: bool = false) -> void:
 	religions_map.clear()
 	languages_map.clear()
 	books_list.clear()
+	total_fires_extinguished_by_water = 0
+	total_social_chats = 0
 	flora_instances.clear()
 	dyson_rings.clear()
 	diplomacy_relations.clear()
@@ -431,12 +435,11 @@ func _build_2d_worldbox_grid(seed_val: int) -> void:
 			var lat: float = (0.5 - uv.y) * PI * 0.88
 			var dir := Vector3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon)).normalized()
 
-			# Формируем архипелаг в открытом центре экрана (x: 360..1540, y: 90..890),
-			# чтобы боковые панели HUD никогда не перекрывали материки и города (края карты — глубокий океан, как в WorldBox)
-			var norm_cx: float = (uv.x - 0.5) / 0.31
-			var norm_cy: float = (uv.y - 0.49) / 0.36
-			var radial_d: float = sqrt(norm_cx * norm_cx * 0.85 + norm_cy * norm_cy)
-			var island_mask: float = clampf(1.18 - pow(radial_d, 2.0), 0.0, 1.0)
+			# Формируем широкий живописный архипелаг в стиле WorldBox (края карты — глубокий океан)
+			var norm_cx: float = (uv.x - 0.5) / 0.41
+			var norm_cy: float = (uv.y - 0.48) / 0.39
+			var radial_d: float = sqrt(norm_cx * norm_cx * 0.82 + norm_cy * norm_cy)
+			var island_mask: float = clampf(1.22 - pow(radial_d, 2.0), 0.0, 1.0)
 			if map_template_id == "pangaea":
 				island_mask = clampf(1.32 - pow(radial_d * 0.82, 1.75), 0.0, 1.0)
 			elif map_template_id == "ring_atoll":
@@ -454,17 +457,22 @@ func _build_2d_worldbox_grid(seed_val: int) -> void:
 			var lat_factor: float = 1.0 - absf(uv.y - 0.5) * 1.85
 			var base_temp: float = -30.0 + lat_factor * 64.0 * star_luminosity_mult - maxf(0.0, elev) * 35.0
 
-			var biome_id: String = "biome_barren_crust"
+			# Органическое распределение биомов стартового материка в точности по канону WorldBox:
+			# основная масса островов — изумрудные луга и леса (#7EAF46 / #5F833C), южные мысы — золотая саванна (#F0B121),
+			# северные пики — снежная мерзлота (#99BCDB), редкие кристаллы — на восточных грядах.
+			var biome_id: String = "biome_primordial_ocean"
 			if elev < -0.02:
 				biome_id = "biome_primordial_ocean"
-			elif base_temp < -12.0 or gy <= 3 or gy >= GRID_H - 4:
+			elif base_temp < -14.0 or gy <= 2 or gy >= GRID_H - 3:
 				biome_id = "biome_cryo_superconductor"
-			elif n_m > 0.05:
+			elif n_m > -0.15:
 				biome_id = "biome_primordial_ocean"
-			elif n_m < -0.22 and elev > 0.08:
+			elif n_m > -0.32:
+				biome_id = "biome_barren_crust"
+			elif elev > 0.24:
 				biome_id = "biome_crystal_lattice"
-			elif elev > 0.26:
-				biome_id = "biome_actinide_wasteland"
+			else:
+				biome_id = "biome_barren_crust"
 
 			var flora_type: String = _pick_flora_for_biome(biome_id, elev, idx)
 
@@ -547,11 +555,11 @@ func _populate_fine_flora_and_minerals() -> void:
 			var uv := Vector2((float(jx) + 0.5) / float(FINE_W), (float(jy) + 0.5) / float(FINE_H))
 			var sample: Dictionary = sample_pixel_terrain(uv)
 			var elev: float = float(sample["elevation"])
-			if elev < 0.038 or elev > 0.33:
+			if elev < 0.042 or elev > 0.225:
 				continue
 			var b_id: String = str(sample["biome_id"])
 			var t_idx: int = int(sample["tile_index"])
-			var is_min: bool = (elev > 0.21) or ((hash_v % 10) < 3)
+			var is_min: bool = (elev > 0.195 and (hash_v % 3 == 0)) or ((hash_v % 16) == 0)
 			var f_type: String = "bio_tree"
 			if is_min:
 				match b_id:
@@ -561,7 +569,7 @@ func _populate_fine_flora_and_minerals() -> void:
 					"biome_cybercore": f_type = "cyber_node"
 					"biome_plasma_inferno": f_type = "lava_vent"
 					"biome_singularity_swamp": f_type = "void_monolith"
-					_: f_type = "basalt_rock"
+					_: f_type = "piezo_spire" if (hash_v % 2 == 0) else "basalt_rock"
 			else:
 				match b_id:
 					"biome_primordial_ocean": f_type = "bio_tree"
@@ -921,10 +929,10 @@ func _seed_initial_cradle() -> void:
 	var idx_east: int = land_candidates[land_candidates.size() - 1]
 	var idx_mid: int = land_candidates[land_candidates.size() / 2]
 
-	# Делаем западный остров Био-Террасой, восточный — Кристаллической Решёткой, северный — Крио-Сверхпроводником
+	# Делаем западный и центральный острова сочной Изумрудной Био-Террасой (#7EAF46), а восточный — Золотой Саванной (#F0B121) с кристаллической бухтой
 	_paint_biome_cluster(idx_west, "biome_primordial_ocean", 0.15)
-	_paint_biome_cluster(idx_east, "biome_crystal_lattice", 0.18)
-	_paint_biome_cluster(idx_mid, "biome_cybercore", 0.14)
+	_paint_biome_cluster(idx_mid, "biome_primordial_ocean", 0.14)
+	_paint_biome_cluster(idx_east, "biome_barren_crust", 0.17)
 
 	_populate_fine_flora_and_minerals()
 
@@ -959,10 +967,12 @@ func _paint_biome_cluster(center_idx: int, biome_id: String, min_elev: float) ->
 # ==============================================================================
 # ГЛАВНЫЙ ЦИКЛ СИМУЛЯЦИИ (WorldBehaviour тики + движение пиксельных человечков)
 # ==============================================================================
+var realtime_pace_scale: float = 0.25 # Плавный темп реального времени в стиле WorldBox (1× = 0.25 сим-сек/сек)
+
 func _process(delta: float) -> void:
 	if paused:
 		return
-	step_simulation(delta * sim_speed)
+	step_simulation(delta * sim_speed * realtime_pace_scale)
 
 
 func step_simulation(dt: float) -> void:
@@ -1296,8 +1306,10 @@ func _step_actors(dt: float) -> void:
 		if hs > 0.0:
 			a["hit_shake"] = maxf(0.0, hs - dt * 4.0)
 
+		var eff_map: Dictionary = a.get("status_effects", {})
+		var is_burning: bool = eff_map.has("status_burning")
 		var wait_t: float = float(a["wait_timer"]) - dt
-		if wait_t > 0.0:
+		if wait_t > 0.0 and not is_burning:
 			a["wait_timer"] = wait_t
 			idx -= 1
 			continue
@@ -1308,7 +1320,7 @@ func _step_actors(dt: float) -> void:
 		var dist: float = diff.length()
 
 		# Проверка колониальной экспедиции
-		if str(a.get("role", "")) == "colonist":
+		if str(a.get("role", "")) == "colonist" and not is_burning:
 			if dist < 12.0:
 				var mother_c_id: int = int(a.get("city_id", -1))
 				var target_t_idx: int = int(a.get("home_tile", -1))
@@ -1326,12 +1338,33 @@ func _step_actors(dt: float) -> void:
 		var local_time: float = clampf(float(tiles[home_idx]["time_scale_mult"]), 1.0, 6.0)
 		var move_speed: float = (38.0 if str(a.get("role", "")) == "colonist" else 32.0) * sqrt(local_time)
 
+		# DecisionsLibrary.run_to_water_when_on_fire: горящий юнит бежит к ближайшей воде и тушит пламя!
+		if is_burning:
+			var cur_elev: float = sample_elevation_fast(pos.x / MAP_PIXEL_W, pos.y / MAP_PIXEL_H)
+			if cur_elev < -0.012 or float(tiles[home_idx]["elevation"]) < -0.012 or (str(a.get("state", "")) == "RUN_TO_WATER" and dist < 8.0):
+				eff_map.erase("status_burning")
+				a["status_effects"] = eff_map
+				a["state"] = "IDLE"
+				a["thought"] = "Прыгнул в воду и потушил пламя!"
+				total_fires_extinguished_by_water += 1
+				is_burning = false
+			else:
+				move_speed *= 1.45
+				var water_t: int = _find_nearest_water_tile(home_idx)
+				if water_t != -1:
+					target = tiles[water_t]["map_pos"]
+					a["target_pos"] = target
+					diff = target - pos
+					dist = diff.length()
+					a["state"] = "RUN_TO_WATER"
+					a["thought"] = "В панике бежит к воде потушить огонь!"
+
 		var c_id: int = int(a.get("city_id", -1))
 		var j_state: String = str(a.get("job_state", "IDLE"))
 		var j_id: String = str(a.get("job_id", "woodcutter"))
 
 		# Цикл задач жителей из WorldBox (ActorJobLibrary: Найти -> Собрать -> Отнести в ратушу -> Построить)
-		if c_id != -1 and cities_map.has(c_id) and str(a.get("role", "")) != "colonist":
+		if c_id != -1 and cities_map.has(c_id) and str(a.get("role", "")) != "colonist" and not eff_map.has("status_burning"):
 			var city: Dictionary = cities_map[c_id]
 			if j_state == "WORKING":
 				var jt: float = float(a.get("job_timer", 0.0)) - dt * sqrt(local_time)
@@ -1358,11 +1391,12 @@ func _step_actors(dt: float) -> void:
 						a["job_state"] = "CARRY_TO_STORAGE"
 						a["thought"] = "Несёт урожай в хранилище"
 					else:
-						# Строитель / Дорожник завершает участок работ
+						# Строитель / Дорожник завершает участок работ и ускоряет возведение здания в полисе
 						var wx: int = clampi(int(pos.x / MAP_PIXEL_W * float(FINE_W)), 1, FINE_W - 2)
 						var wy: int = clampi(int(pos.y / MAP_PIXEL_H * float(FINE_H)), 1, FINE_H - 2)
 						if fine_road_overlay.size() == FINE_COUNT and sample_elevation_fast(pos.x / MAP_PIXEL_W, pos.y / MAP_PIXEL_H) >= 0.01:
 							fine_road_overlay[wy * FINE_W + wx] = 1
+						city["build_progress"] = float(city.get("build_progress", 0.0)) + 1.8
 						total_citizen_tasks_completed += 1
 						a["job_state"] = "IDLE"
 						a["wait_timer"] = _rng.randf_range(0.25, 0.7)
@@ -1527,6 +1561,35 @@ func find_closest_actor(world_pos: Vector2, max_dist: float = 42.0) -> Dictionar
 			best_d = d
 			best_actor = a
 	return best_actor
+
+
+func _find_nearest_water_tile(start_idx: int) -> int:
+	if start_idx < 0 or start_idx >= TILE_COUNT:
+		return -1
+	var start_p: Vector2 = tiles[start_idx]["map_pos"]
+	var best_idx: int = -1
+	var best_d: float = 999999.0
+	for n1 in tiles[start_idx]["neighbors"]:
+		if float(tiles[n1]["elevation"]) < -0.015:
+			var d1: float = (tiles[n1]["map_pos"] as Vector2).distance_to(start_p)
+			if d1 < best_d:
+				best_d = d1
+				best_idx = n1
+		for n2 in tiles[n1]["neighbors"]:
+			if float(tiles[n2]["elevation"]) < -0.015:
+				var d2: float = (tiles[n2]["map_pos"] as Vector2).distance_to(start_p)
+				if d2 < best_d:
+					best_d = d2
+					best_idx = n2
+	if best_idx != -1:
+		return best_idx
+	for i in range(TILE_COUNT):
+		if float(tiles[i]["elevation"]) < -0.02:
+			var d: float = (tiles[i]["map_pos"] as Vector2).distance_to(start_p)
+			if d < best_d:
+				best_d = d
+				best_idx = i
+	return best_idx
 
 
 # ==============================================================================
@@ -1818,6 +1881,33 @@ func _tick_biome_spread_and_abiogenesis() -> void:
 					surface_dirty = true
 					dirty_tiles.append(r_idx)
 
+	# WorldBehaviourLibrary.spawn_random_vegetation: естественный рост новых деревьев и самородков с пружинной анимацией
+	if flora_instances.size() < 480:
+		for _veg_try in range(2):
+			var v_idx: int = _rng.randi_range(0, TILE_COUNT - 1)
+			var v_tile: Dictionary = tiles[v_idx]
+			var v_el: float = float(v_tile["elevation"])
+			if v_el >= 0.05 and v_el < 0.65:
+				var vb_id: String = str(v_tile["biome_id"])
+				var f_type: String = _pick_flora_for_biome(vb_id, v_el, v_idx + int(world_year * 10.0))
+				if f_type != "none":
+					var b_ass: SandboxAssetScript.BiomeAsset = assets.biomes.get(vb_id)
+					var fc: Color = b_ass.decor_color if b_ass != null else Color(0.28, 0.72, 0.32)
+					var t_pos: Vector2 = v_tile["map_pos"]
+					flora_instances.append({
+						"id": _next_meta_id,
+						"tile_idx": v_idx,
+						"pos": t_pos + Vector2(_rng.randf_range(-14.0, 14.0), _rng.randf_range(-10.0, 10.0)),
+						"type": f_type,
+						"scale": _rng.randf_range(0.75, 1.30),
+						"phase": _rng.randf_range(0.0, TAU),
+						"hit_timer": 0.0,
+						"hp": 3,
+						"color": fc,
+						"spawn_spring": 0.08
+					})
+					_next_meta_id += 1
+
 	if surface_dirty:
 		request_dirty_tiles_update(dirty_tiles)
 		planet_surface_changed.emit()
@@ -2019,8 +2109,9 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		"claimed_zones": claimed_zones,
 		"storage": {"wood": 25, "minerals": 20, "food": 35},
 		"population": 28.0,
-		"kardashev_level": 0.60,
+		"kardashev_level": 0.50,
 		"science_tier": 1,
+		"build_progress": 0.0,
 		"buildings": {"order_bio_dome": 1},
 		"building_instances": [],
 		"orbital_drones": 2,
@@ -2178,16 +2269,38 @@ func _tick_city_build_orders(dt: float) -> void:
 		total_e_rate += city_e
 		total_c_rate += city_c
 
+		# Пополнение локального склада полиса при ускорении времени (или работе лесорубов/шахтёров) и накопление прогресса стройки
+		if not city.has("storage"):
+			city["storage"] = {"wood": 20, "minerals": 15, "food": 30}
+		var st_dict: Dictionary = city["storage"]
+		if time_mult > 1.5:
+			st_dict["wood"] = int(st_dict.get("wood", 0)) + maxi(1, int(time_mult * 0.25))
+			st_dict["minerals"] = int(st_dict.get("minerals", 0)) + maxi(1, int(time_mult * 0.22))
+			st_dict["food"] = int(st_dict.get("food", 0)) + maxi(1, int(time_mult * 0.25))
+		elif _rng.randf() < 0.35:
+			st_dict["wood"] = int(st_dict.get("wood", 0)) + 1
+			st_dict["minerals"] = int(st_dict.get("minerals", 0)) + 1
+
+		city["build_progress"] = float(city.get("build_progress", 0.0)) + (1.05 * build_speed * time_mult * dt)
+
 		var chosen_order: SandboxAssetScript.BuildOrderAsset = _select_next_build_order(city)
 		if chosen_order != null:
 			var cost_m: float = chosen_order.required_matter / maxf(1.0, build_speed * 0.5)
 			var cost_e: float = chosen_order.required_energy / maxf(1.0, build_speed * 0.5)
-			if matter_stock >= cost_m and energy_gw >= cost_e:
+			var build_req: float = 6.5 + float(chosen_order.tier) * 3.2
+			var req_wood: int = maxi(1, chosen_order.tier)
+			var req_min: int = maxi(1, chosen_order.tier)
+			var has_local_res: bool = (int(st_dict.get("wood", 0)) >= req_wood and int(st_dict.get("minerals", 0)) >= req_min)
+			if float(city.get("build_progress", 0.0)) >= build_req and has_local_res and matter_stock >= cost_m and energy_gw >= cost_e:
+				city["build_progress"] = 0.0
+				st_dict["wood"] = maxi(0, int(st_dict.get("wood", 0)) - req_wood)
+				st_dict["minerals"] = maxi(0, int(st_dict.get("minerals", 0)) - req_min)
 				matter_stock -= cost_m * 0.65
 				var prev_cnt: int = int(b_dict.get(chosen_order.id, 0))
 				b_dict[chosen_order.id] = prev_cnt + 1
 				city["science_tier"] = maxi(int(city["science_tier"]), chosen_order.tier)
-				city["kardashev_level"] = minf(3.0, float(city["kardashev_level"]) + 0.06 * float(chosen_order.tier))
+				var k_gain: float = (0.055 * float(chosen_order.tier)) if prev_cnt == 0 else 0.012
+				city["kardashev_level"] = minf(3.0, float(city["kardashev_level"]) + k_gain)
 
 				if chosen_order.spawns_orbital_drones > 0 and active_world_laws.get("law_autonomous_megastructures", true):
 					city["orbital_drones"] = int(city["orbital_drones"]) + chosen_order.spawns_orbital_drones
@@ -2471,7 +2584,7 @@ func _try_start_plot_for_city(city: Dictionary, cult: Dictionary) -> void:
 	var k_lvl: float = float(city["kardashev_level"])
 
 	for p_asset in assets.plot_list:
-		if k_lvl + 0.25 < p_asset.min_kardashev:
+		if k_lvl + 0.35 < p_asset.min_kardashev:
 			continue
 		if p_asset.reward_culture_trait != "" and c_traits.has(p_asset.reward_culture_trait):
 			continue
@@ -4674,6 +4787,25 @@ func _step_actor_status_effects_and_needs(dt: float) -> void:
 		a["nutrition"] = nut
 		if nut <= 2.0:
 			a["happiness"] = maxf(5.0, float(a.get("happiness", 85.0)) - dt * 2.0)
+
+		# 1б. Общение жителей у костра и площадей (WorldBox BehSocialize / HappinessLibrary.just_talked)
+		var chat_t: float = maxf(0.0, float(a.get("chat_timer", 0.0)) - dt)
+		a["chat_timer"] = chat_t
+		if chat_t <= 0.0 and cid != -1 and str(a.get("state", "IDLE")) in ["IDLE", "WALKING_TO_RESOURCE"] and _rng.randf() < 0.14 * dt:
+			var a_pos: Vector2 = a["pos"]
+			for k in range(maxi(0, i - 10), mini(actors.size(), i + 10)):
+				if k == i:
+					continue
+				var other: Dictionary = actors[k]
+				if int(other.get("city_id", -1)) == cid and float(other.get("chat_timer", 0.0)) <= 0.0:
+					if a_pos.distance_to(other["pos"]) <= 28.0:
+						a["chat_timer"] = 2.4
+						other["chat_timer"] = 2.4
+						a["happiness"] = minf(100.0, float(a.get("happiness", 85.0)) + 5.0)
+						other["happiness"] = minf(100.0, float(other.get("happiness", 85.0)) + 5.0)
+						a["thought"] = "Беседует с %s у площади" % str(other.get("name", "соседом"))
+						total_social_chats += 1
+						break
 
 		# 2. Временные статус-эффекты
 		var effs: Dictionary = a.get("status_effects", {})

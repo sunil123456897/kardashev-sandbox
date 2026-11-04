@@ -18,60 +18,44 @@ func _init() -> void:
 	var camera = main_node.camera
 	var hud = main_node.hud
 
-	# 1. Нанесём яркие божественные вмешательства на континенты в центральной зоне 2D-карты
 	var center_pos := Vector2(960.0, 500.0)
 	var west_pos := Vector2(640.0, 440.0)
 	var east_pos := Vector2(1240.0, 460.0)
 	var south_pos := Vector2(920.0, 690.0)
 
-	sim.apply_god_power_at_pos(center_pos, "power_cyber_nanites", 0.24)
-	sim.apply_god_power_at_pos(center_pos, "power_seed_cyber", 0.18)
-	sim.apply_god_power_at_pos(center_pos, "power_lens_time_accel", 0.24)
-
-	sim.apply_god_power_at_pos(west_pos, "power_actinide_meteor", 0.22)
-	sim.apply_god_power_at_pos(west_pos, "power_seed_plasma", 0.18)
-	sim.apply_god_power_at_pos(west_pos, "power_monolith_uplift", 0.18)
-
-	sim.apply_god_power_at_pos(east_pos, "power_crystal_lattice", 0.24)
-	sim.apply_god_power_at_pos(east_pos, "power_lens_zero_grav", 0.22)
-
-	sim.apply_god_power_at_pos(south_pos, "power_solar_plasma", 0.20)
-	sim.apply_god_power_at_pos(south_pos, "power_lens_singularity", 0.20)
-	sim.apply_god_power_at_pos(center_pos, "power_bless_unit", 0.22)
+	# 1. Для Скриншота 1 сохраняем естественный изумрудный архипелаг WorldBox с деревнями, кострами, кораблями и жителями
+	sim.apply_god_power_at_pos(center_pos, "power_bless_unit", 0.18)
 	sim.apply_god_power_at_pos(east_pos, "power_spawn_fauna", 0.18)
-
-	# Добавим несколько колец Сферы Дайсона
-	sim.apply_god_power_at_pos(center_pos, "power_dyson_ring")
-	sim.apply_god_power_at_pos(center_pos, "power_dyson_ring")
-	sim.apply_god_power_at_pos(center_pos, "power_stellar_stabilizer")
-
-	# Прокрутим 35 шагов симуляции, чтобы города выросли, человечки побежали по островам и запустили ракеты
-	for _s in range(35):
-		sim.step_simulation(1.0)
+	for _s in range(14):
+		sim.step_simulation(0.8)
 		renderer._process(0.08)
 
-	# Запустим пару ракет прямо перед кадром для сочного следа + облако, торнадо и Меха-Колосс К-Титан
-	sim.rocket_launched.emit(center_pos, Color(0.25, 0.95, 1.0), "Нова-Аксиома")
-	sim.rocket_launched.emit(west_pos, Color(1.0, 0.65, 0.2), "Гелиос-Купол")
 	sim.spawn_cloud(west_pos + Vector2(60.0, -30.0), "rain")
-	sim.spawn_tornado(east_pos + Vector2(-50.0, 40.0), 46.0)
-	sim.spawn_kardashev_colossus(center_pos + Vector2(36.0, 18.0))
 	renderer._process(0.15)
-
 	hud.update_tile_scanner(sim.find_closest_tile_2d(center_pos), center_pos)
-	renderer.set_cursor_brush_preview_2d(true, center_pos, 105.0, Color(0.2, 0.95, 1.0))
+	renderer.set_cursor_brush_preview_2d(false, center_pos, 60.0, Color.WHITE)
 
 	DirAccess.make_dir_recursive_absolute("E:/Godot_Проекты/1/screenshots")
 
-	# Скриншот 1: 2D WorldBox Карта Мира (архипелаг, биомы, пиксельные человечки, здания, ракеты и линзы физики)
+	# Скриншот 1: Аутентичная 2D WorldBox Карта Мира (изумрудные леса, песчаные пляжи, деревни с черепичными крышами, костры и корабли)
 	camera.set_view_mode(0)
 	camera.apply_immediately()
-	hud._select_tab("lenses")
+	hud._select_tab("life")
 	for _f in range(6):
 		await process_frame
 	var img1: Image = root.get_texture().get_image()
 	img1.save_png("E:/Godot_Проекты/1/screenshots/shot_1_planet_civilizations.png")
 	print("Saved shot_1_planet_civilizations.png")
+
+	# 2. Теперь применяем космические вмешательства и кольца Сферы Дайсона для скриншотов 2..6
+	sim.apply_god_power_at_pos(center_pos, "power_lens_time_accel", 0.22)
+	sim.apply_god_power_at_pos(east_pos, "power_crystal_lattice", 0.20)
+	sim.apply_god_power_at_pos(center_pos, "power_dyson_ring")
+	sim.apply_god_power_at_pos(center_pos, "power_dyson_ring")
+	sim.apply_god_power_at_pos(center_pos, "power_stellar_stabilizer")
+	for _s2 in range(20):
+		sim.step_simulation(1.0)
+		renderer._process(0.08)
 
 	# Скриншот 2: 2D Пиксель-Арт Звезда и вращающиеся кольца Сферы Дайсона
 	hud._select_tab("cosmos")

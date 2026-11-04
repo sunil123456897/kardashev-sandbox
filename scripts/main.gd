@@ -107,6 +107,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				if sim.controlled_actor_id == -1:
 					sim.paused = not sim.paused
 					hud._refresh_telemetry_and_lists()
+			KEY_TAB:
+				hud.toggle_side_panels()
+				if audio != null:
+					audio.play_ui_sfx("ui_click")
 			KEY_T:
 				hud.toggle_codex_modal()
 				if audio != null:

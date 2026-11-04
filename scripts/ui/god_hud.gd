@@ -77,6 +77,9 @@ var _vbox_analytics_content: VBoxContainer
 
 var _modal_world: PanelContainer
 var _vbox_world_content: VBoxContainer
+var _left_panel: PanelContainer
+var _right_panel: PanelContainer
+var side_panels_visible: bool = false
 var renderer: Node = null
 
 
@@ -92,6 +95,14 @@ func setup(simulation: WorldSimulationScript) -> void:
 	_select_power("power_cryo_comet")
 	_refresh_telemetry_and_lists()
 	_rebuild_event_log()
+
+
+func toggle_side_panels() -> void:
+	side_panels_visible = not side_panels_visible
+	if _left_panel != null:
+		_left_panel.visible = side_panels_visible
+	if _right_panel != null:
+		_right_panel.visible = side_panels_visible
 
 
 func _make_panel_style(bg_col: Color, border_col: Color, corner_r: int = 8) -> StyleBoxFlat:
@@ -143,11 +154,11 @@ func _build_ui_tree() -> void:
 	root.add_child(top_panel)
 
 	var top_hbox := HBoxContainer.new()
-	top_hbox.add_theme_constant_override("separation", 8)
+	top_hbox.add_theme_constant_override("separation", 5)
 	top_panel.add_child(top_hbox)
 
 	_lbl_system_title = Label.new()
-	_lbl_system_title.add_theme_font_size_override("font_size", 13)
+	_lbl_system_title.add_theme_font_size_override("font_size", 12)
 	_lbl_system_title.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	top_hbox.add_child(_lbl_system_title)
 
@@ -155,13 +166,13 @@ func _build_ui_tree() -> void:
 	top_hbox.add_child(sep1)
 
 	_lbl_resources = Label.new()
-	_lbl_resources.add_theme_font_size_override("font_size", 13)
+	_lbl_resources.add_theme_font_size_override("font_size", 12)
 	_lbl_resources.add_theme_color_override("font_color", Color(0.45, 0.95, 0.85))
 	_lbl_resources.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_hbox.add_child(_lbl_resources)
 
 	_lbl_star_dyson = Label.new()
-	_lbl_star_dyson.add_theme_font_size_override("font_size", 13)
+	_lbl_star_dyson.add_theme_font_size_override("font_size", 12)
 	_lbl_star_dyson.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
 	top_hbox.add_child(_lbl_star_dyson)
 
@@ -174,9 +185,9 @@ func _build_ui_tree() -> void:
 	top_hbox.add_child(cam_box)
 
 	var cam_modes := [
-		{"title": "1:Карта 2D", "mode": 0},
-		{"title": "2:Сфера 2D", "mode": 1},
-		{"title": "3:Система 2D", "mode": 2}
+		{"title": "1:Карта", "mode": 0},
+		{"title": "2:Сфера", "mode": 1},
+		{"title": "3:Система", "mode": 2}
 	]
 	for cm in cam_modes:
 		var b := Button.new()
@@ -201,20 +212,24 @@ func _build_ui_tree() -> void:
 	spd_box.add_child(_btn_speed_5)
 	spd_box.add_child(_btn_speed_25)
 
-	# Кнопки Кодекса, Законов Мира, Мира/Сохранений и Глобальной Аналитики
-	var btn_world := _create_top_action_btn("🌍 Мир", func() -> void: toggle_world_modal())
-	var btn_codex := _create_top_action_btn("📜 Кодекс", func() -> void: toggle_codex_modal())
-	var btn_laws := _create_top_action_btn("⚖ Законы", func() -> void: toggle_laws_modal())
-	var btn_analytics := _create_top_action_btn("📊 Аналитика [F9]", func() -> void: toggle_analytics_modal())
+	# Кнопки Списков/Хроники, Кодекса, Законов Мира, Мира/Сохранений и Глобальной Аналитики
+	var btn_panels := _create_top_action_btn("📋Tab", func() -> void: toggle_side_panels())
+	var btn_world := _create_top_action_btn("🌍Мир", func() -> void: toggle_world_modal())
+	var btn_codex := _create_top_action_btn("📜Кодекс", func() -> void: toggle_codex_modal())
+	var btn_laws := _create_top_action_btn("⚖Законы", func() -> void: toggle_laws_modal())
+	var btn_analytics := _create_top_action_btn("📊F9", func() -> void: toggle_analytics_modal())
+	top_hbox.add_child(btn_panels)
 	top_hbox.add_child(btn_world)
 	top_hbox.add_child(btn_codex)
 	top_hbox.add_child(btn_laws)
 	top_hbox.add_child(btn_analytics)
 
 	# ==========================================================================
-	# 2. ЛЕВАЯ ПАНЕЛЬ: ИНСПЕКТОР ПОЛИСОВ, ВИДОВ И СКАНЕР КУРСОРА
+	# 2. ЛЕВАЯ ПАНЕЛЬ: ИНСПЕКТОР ПОЛИСОВ, ВИДОВ И СКАНЕР КУРСОРА (скрываемая по Tab)
 	# ==========================================================================
 	var left_panel := PanelContainer.new()
+	_left_panel = left_panel
+	left_panel.visible = side_panels_visible
 	left_panel.anchor_left = 0.0
 	left_panel.anchor_top = 0.0
 	left_panel.anchor_bottom = 1.0
@@ -261,9 +276,11 @@ func _build_ui_tree() -> void:
 	left_vbox.add_child(_lbl_tile_scanner)
 
 	# ==========================================================================
-	# 3. ПРАВАЯ ПАНЕЛЬ: ЖУРНАЛ ОТКРОВЕНИЙ И ИСТОРИИ МИРА
+	# 3. ПРАВАЯ ПАНЕЛЬ: ЖУРНАЛ ОТКРОВЕНИЙ И ИСТОРИИ МИРА (скрываемая по Tab)
 	# ==========================================================================
 	var right_panel := PanelContainer.new()
+	_right_panel = right_panel
+	right_panel.visible = side_panels_visible
 	right_panel.anchor_left = 1.0
 	right_panel.anchor_right = 1.0
 	right_panel.anchor_top = 0.0
