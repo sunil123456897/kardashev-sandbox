@@ -45,6 +45,33 @@ const CELL_W: float = MAP_PIXEL_W / float(GRID_W) # 60.0 px
 const CELL_H: float = MAP_PIXEL_H / float(GRID_H) # 33.75 px
 const PLANET_RADIUS: float = 10.0
 
+# Высокодетальная сетка WorldTile (384×216 = 82 944 микро-тайла, чанки 16×16, зоны городов 8×8 как в WorldBox v0.51.2)
+const FINE_W: int = 384
+const FINE_H: int = 216
+const FINE_COUNT: int = FINE_W * FINE_H
+const CHUNK_SIZE: int = 16
+const CHUNK_W: int = 24 # 384 / 16
+const CHUNK_H: int = 14 # ceil(216 / 16)
+const ZONE_SIZE: int = 8
+const ZONE_W: int = 48 # 384 / 8
+const ZONE_H: int = 27 # 216 / 8
+const ZONE_COUNT: int = ZONE_W * ZONE_H # 1296 прямоугольных зон 8×8
+
+const BASE_DEEP_OCEAN: int = 0
+const BASE_CLOSE_OCEAN: int = 1
+const BASE_SHALLOW_WATERS: int = 2
+const BASE_SAND: int = 3
+const BASE_SOIL_LOW: int = 4
+const BASE_SOIL_HIGH: int = 5
+const BASE_HILLS: int = 6
+const BASE_MOUNTAINS: int = 7
+const BASE_SUMMIT: int = 8
+const BASE_ROAD: int = 9
+const BASE_FIELD: int = 10
+const BASE_LAVA0: int = 11
+const BASE_LAVA1: int = 12
+const BASE_LAVA2: int = 13
+
 const FIXED_SUBSTEP_DT: float = 0.05
 const MAX_SUBSTEPS_PER_FRAME: int = 600
 
@@ -93,6 +120,20 @@ func request_dirty_tiles_update(tile_indices: Array) -> void:
 			min_gy = mini(min_gy, gy)
 			max_gx = maxi(max_gx, gx)
 			max_gy = maxi(max_gy, gy)
+	# Если изменились 2–5 разрозненных тайлов на разных концах карты, обновляем каждый локально (350 пикселей вместо 55,000)
+	if tile_indices.size() <= 5 and (max_gx - min_gx > 4 or max_gy - min_gy > 4):
+		for idx in tile_indices:
+			var t_idx: int = int(idx)
+			if t_idx >= 0 and t_idx < TILE_COUNT:
+				var t: Dictionary = tiles[t_idx]
+				var gx: int = int(t["gx"])
+				var gy: int = int(t["gy"])
+				var lx: int = clampi(int(float(gx) / float(GRID_W) * 384.0) - 2, 0, 384)
+				var ly: int = clampi(int(float(gy) / float(GRID_H) * 216.0) - 2, 0, 216)
+				var lw: int = clampi(16, 1, 384 - lx)
+				var lh: int = clampi(11, 1, 216 - ly)
+				dirty_rect_requested.emit(Rect2i(lx, ly, lw, lh))
+		return
 	var px_x: int = clampi(int(float(min_gx) / float(GRID_W) * 384.0) - 2, 0, 384)
 	var px_y: int = clampi(int(float(min_gy) / float(GRID_H) * 216.0) - 2, 0, 216)
 	var px_w: int = clampi(int(ceil(float(max_gx - min_gx + 1) / float(GRID_W) * 384.0)) + 4, 1, 384 - px_x)
@@ -162,8 +203,19 @@ var codex_matter_mult: float = 1.0
 var codex_energy_mult: float = 1.0
 var codex_compute_mult: float = 1.0
 
-# 2D-сетка карты (1024 тайла + генераторы шума для попиксельного рендера островов)
+# 2D-сетка карты (1024 макро-тайла + типизированные буферы 384×216 WorldTile + чанки 16×16 и зоны 8×8)
 var tiles: Array[Dictionary] = []
+var fine_elevation: PackedFloat32Array = PackedFloat32Array()
+var fine_base_tile: PackedByteArray = PackedByteArray()
+var fine_biome_idx: PackedByteArray = PackedByteArray()
+var fine_top_variant: PackedByteArray = PackedByteArray()
+var fine_road_overlay: PackedByteArray = PackedByteArray()
+var zone_city_id: PackedInt32Array = PackedInt32Array()
+var chunk_dirty: PackedByteArray = PackedByteArray()
+var flora_instances: Array[Dictionary] = []
+var total_citizen_tasks_completed: int = 0
+var _biome_id_to_idx: Dictionary = {}
+
 var _noise_elev: FastNoiseLite
 var _noise_moisture: FastNoiseLite
 var _noise_detail: FastNoiseLite
@@ -231,11 +283,13 @@ func setup_world(seed_val: int = 1337, preserve_codex: bool = false) -> void:
 	active_plots.clear()
 	field_lenses.clear()
 	actors.clear()
+	flora_instances.clear()
 	dyson_rings.clear()
 	diplomacy_relations.clear()
 	_diplomacy_timer = 0.0
 	_last_colony_time = -999.0
 	total_dyson_sails = 0
+	total_citizen_tasks_completed = 0
 	dyson_stage = 1
 	dyson_stage_progress = 0.0
 	dyson_ring_frame_segments = 0
@@ -387,6 +441,85 @@ func _build_2d_worldbox_grid(seed_val: int) -> void:
 						nbrs.append(ny * GRID_W + nx)
 			tiles[idx]["neighbors"] = nbrs
 
+	_init_worldbox_fine_buffers()
+
+
+func _init_worldbox_fine_buffers() -> void:
+	_biome_id_to_idx.clear()
+	for i in range(assets.biome_list.size()):
+		_biome_id_to_idx[assets.biome_list[i].id] = i
+
+	if fine_road_overlay.size() != FINE_COUNT:
+		fine_road_overlay.resize(FINE_COUNT)
+	fine_road_overlay.fill(0)
+
+	if zone_city_id.size() != ZONE_COUNT:
+		zone_city_id.resize(ZONE_COUNT)
+	zone_city_id.fill(-1)
+
+	if chunk_dirty.size() != CHUNK_W * CHUNK_H:
+		chunk_dirty.resize(CHUNK_W * CHUNK_H)
+	chunk_dirty.fill(1)
+
+
+func _populate_fine_flora_and_minerals() -> void:
+	flora_instances.clear()
+	var fid: int = 1
+	for wy in range(12, FINE_H - 12, 3):
+		for wx in range(28, FINE_W - 28, 3):
+			var hash_v: int = ((wx * 73856093) ^ (wy * 19349663) ^ (world_seed * 83492791)) & 0x7fffffff
+			if (hash_v % 100) > 24:
+				continue
+			var jx: int = clampi(wx + (hash_v % 3) - 1, 8, FINE_W - 9)
+			var jy: int = clampi(wy + ((hash_v >> 3) % 3) - 1, 8, FINE_H - 9)
+			var uv := Vector2((float(jx) + 0.5) / float(FINE_W), (float(jy) + 0.5) / float(FINE_H))
+			var sample: Dictionary = sample_pixel_terrain(uv)
+			var elev: float = float(sample["elevation"])
+			if elev < 0.038 or elev > 0.33:
+				continue
+			var b_id: String = str(sample["biome_id"])
+			var t_idx: int = int(sample["tile_index"])
+			var is_min: bool = (elev > 0.21) or ((hash_v % 10) < 3)
+			var f_type: String = "bio_tree"
+			if is_min:
+				match b_id:
+					"biome_crystal_lattice": f_type = "piezo_spire"
+					"biome_cryo_superconductor": f_type = "cryo_crystal"
+					"biome_actinide_wasteland": f_type = "actinide_ore"
+					"biome_cybercore": f_type = "cyber_node"
+					"biome_plasma_inferno": f_type = "lava_vent"
+					"biome_singularity_swamp": f_type = "void_monolith"
+					_: f_type = "basalt_rock"
+			else:
+				match b_id:
+					"biome_primordial_ocean": f_type = "bio_tree"
+					"biome_barren_crust": f_type = "savanna_tree" if (hash_v % 2 == 0) else "bio_tree"
+					"biome_cryo_superconductor": f_type = "pine_tree"
+					"biome_crystal_lattice": f_type = "piezo_spire"
+					"biome_cybercore": f_type = "cyber_node"
+					"biome_actinide_wasteland": f_type = "actinide_ore"
+					"biome_plasma_inferno": f_type = "lava_vent"
+					"biome_singularity_swamp": f_type = "void_monolith"
+					_: f_type = "bio_tree"
+
+			var w_pos := Vector2(uv.x * MAP_PIXEL_W, uv.y * MAP_PIXEL_H)
+			flora_instances.append({
+				"id": fid,
+				"pos": w_pos,
+				"wx": jx,
+				"wy": jy,
+				"tile_idx": t_idx,
+				"type": f_type,
+				"is_mineral": is_min,
+				"hp": 4.0,
+				"sway_phase": float(hash_v % 628) * 0.01,
+				"chop_shake": 0.0,
+				"spawn_spring": 1.0
+			})
+			fid += 1
+			if flora_instances.size() >= 480:
+				return
+
 
 func _pick_flora_for_biome(biome_id: String, elev: float, seed_idx: int) -> String:
 	if elev < -0.02:
@@ -442,12 +575,247 @@ func sample_pixel_terrain(px_uv: Vector2) -> Dictionary:
 	var jy: int = clampi(int(fy + micro_jitter * 12.0), 0, GRID_H - 1)
 	var b_tile: Dictionary = tiles[jy * GRID_W + jx]
 
+	# Smoother zone-based city_id lookup (8x8 TileZone grid synced with 32x32 macro grid)
+	var zx: int = clampi(int(px_uv.x * float(ZONE_W)), 0, ZONE_W - 1)
+	var zy: int = clampi(int(px_uv.y * float(ZONE_H)), 0, ZONE_H - 1)
+	var z_id: int = zy * ZONE_W + zx
+	var z_city: int = int(t["city_id"])
+	if z_id >= 0 and z_id < zone_city_id.size() and zone_city_id[z_id] != -1:
+		z_city = zone_city_id[z_id]
+
 	return {
 		"elevation": final_elev,
 		"biome_id": b_tile["biome_id"],
-		"city_id": t["city_id"],
-		"tile_index": t_idx
+		"city_id": z_city,
+		"tile_index": t_idx,
+		"zone_id": z_id
 	}
+
+
+func sample_elevation_fast(u: float, v: float) -> float:
+	var fx: float = clampf(u * float(GRID_W), 0.0, float(GRID_W) - 0.001)
+	var fy: float = clampf(v * float(GRID_H), 0.0, float(GRID_H) - 0.001)
+	var gx: int = int(fx)
+	var gy: int = int(fy)
+	var gx1: int = mini(gx + 1, GRID_W - 1)
+	var gy1: int = mini(gy + 1, GRID_H - 1)
+	var tx: float = fx - float(gx)
+	var ty: float = fy - float(gy)
+
+	var e00: float = float(tiles[gy * GRID_W + gx]["elevation"])
+	var e10: float = float(tiles[gy * GRID_W + gx1]["elevation"])
+	var e01: float = float(tiles[gy1 * GRID_W + gx]["elevation"])
+	var e11: float = float(tiles[gy1 * GRID_W + gx1]["elevation"])
+	var base_e: float = lerpf(lerpf(e00, e10, tx), lerpf(e01, e11, tx), ty)
+
+	var coast_jitter: float = _noise_detail.get_noise_2d(u * 180.0, v * 110.0) * 0.055
+	var micro_jitter: float = _noise_detail.get_noise_2d(u * 420.0 + 70.0, v * 260.0) * 0.022
+	return base_e + coast_jitter + micro_jitter
+
+
+func classify_base_tile_tier(elev: float) -> int:
+	if elev < -0.18:
+		return 0 # deep_ocean
+	elif elev < -0.055:
+		return 1 # close_ocean
+	elif elev < 0.0:
+		return 2 # shallow_waters
+	elif elev < 0.034:
+		return 3 # sand
+	elif elev < 0.135:
+		return 4 # soil_low / top_low
+	elif elev < 0.235:
+		return 5 # soil_high / top_high
+	elif elev < 0.285:
+		return 6 # hills
+	elif elev < 0.345:
+		return 7 # mountains
+	return 8 # summit
+
+
+func get_base_tile_id_for_tier(tier: int, biome_id: String = "") -> String:
+	if biome_id == "biome_plasma_inferno" and tier >= 3 and tier <= 5:
+		return "lava1" if tier == 5 else "lava0"
+	match tier:
+		0: return "deep_ocean"
+		1: return "close_ocean"
+		2: return "shallow_waters"
+		3: return "sand"
+		4: return "soil_low"
+		5: return "soil_high"
+		6: return "hills"
+		7: return "mountains"
+		_: return "summit"
+
+
+func sample_fine_world_tile(px: int, py: int) -> Dictionary:
+	var c_px: int = clampi(px, 0, FINE_W - 1)
+	var c_py: int = clampi(py, 0, FINE_H - 1)
+	var uv := Vector2((float(c_px) + 0.5) / float(FINE_W), (float(c_py) + 0.5) / float(FINE_H))
+	var cur: Dictionary = sample_pixel_terrain(uv)
+	var elev: float = float(cur["elevation"])
+	var biome_id: String = str(cur["biome_id"])
+	var tier: int = classify_base_tile_tier(elev)
+
+	# Кардинальные соседи (N, E, S, W) для 4-битного автотайлинга, береговой пены и теней высот (WorldBox Cliff Shadow)
+	var v_n: float = (float(maxi(0, c_py - 1)) + 0.5) / float(FINE_H)
+	var v_s: float = (float(mini(FINE_H - 1, c_py + 1)) + 0.5) / float(FINE_H)
+	var u_w: float = (float(maxi(0, c_px - 1)) + 0.5) / float(FINE_W)
+	var u_e: float = (float(mini(FINE_W - 1, c_px + 1)) + 0.5) / float(FINE_W)
+
+	var tier_n: int = classify_base_tile_tier(sample_elevation_fast(uv.x, v_n))
+	var tier_s: int = classify_base_tile_tier(sample_elevation_fast(uv.x, v_s))
+	var tier_w: int = classify_base_tile_tier(sample_elevation_fast(u_w, uv.y))
+	var tier_e: int = classify_base_tile_tier(sample_elevation_fast(u_e, uv.y))
+
+	# 4-битная маска одинакового уровня высоты (N=1, E=2, S=4, W=8)
+	var mask_4bit: int = 0
+	if tier_n >= tier: mask_4bit |= 1
+	if tier_e >= tier: mask_4bit |= 2
+	if tier_s >= tier: mask_4bit |= 4
+	if tier_w >= tier: mask_4bit |= 8
+
+	var has_cliff_shadow: bool = (tier_n > tier and tier_n >= 3)
+	var is_cliff_rim: bool = (tier >= 3 and tier_s < tier)
+	var is_shoreline_foam: bool = (tier == 2 and (tier_n >= 3 or tier_s >= 3 or tier_w >= 3 or tier_e >= 3))
+	var is_wet_sand: bool = (tier == 3 and (tier_n <= 2 or tier_s <= 2 or tier_w <= 2 or tier_e <= 2))
+
+	var fine_idx: int = c_py * FINE_W + c_px
+	var road_val: int = fine_road_overlay[fine_idx] if fine_idx < fine_road_overlay.size() else 0
+	var has_road: bool = (road_val == 1 and tier >= 3 and tier <= 5)
+	var has_field: bool = (road_val == 2 and tier >= 3 and tier <= 5)
+
+	var base_tile_id: String = get_base_tile_id_for_tier(tier, biome_id)
+	if has_road:
+		base_tile_id = "road"
+	elif has_field:
+		base_tile_id = "field"
+
+	var zx: int = clampi(c_px / ZONE_SIZE, 0, ZONE_W - 1)
+	var zy: int = clampi(c_py / ZONE_SIZE, 0, ZONE_H - 1)
+	var z_id: int = zy * ZONE_W + zx
+	var c_id: int = int(cur["city_id"])
+
+	var is_zone_border := false
+	if c_id != -1 and tier >= 2:
+		if (c_px % ZONE_SIZE == 0) and (zx == 0 or _get_zone_owner(zx - 1, zy) != c_id):
+			is_zone_border = true
+		elif (c_px % ZONE_SIZE == ZONE_SIZE - 1) and (zx == ZONE_W - 1 or _get_zone_owner(zx + 1, zy) != c_id):
+			is_zone_border = true
+		elif (c_py % ZONE_SIZE == 0) and (zy == 0 or _get_zone_owner(zx, zy - 1) != c_id):
+			is_zone_border = true
+		elif (c_py % ZONE_SIZE == ZONE_SIZE - 1) and (zy == ZONE_H - 1 or _get_zone_owner(zx, zy + 1) != c_id):
+			is_zone_border = true
+
+	var hash_decor: int = ((c_px * 374761393) ^ (c_py * 668265263)) & 0x7fffffff
+	var is_decor: bool = (tier >= 4 and tier <= 5 and not has_road and not has_field and (hash_decor % 19 == 0))
+
+	return {
+		"px": c_px,
+		"py": c_py,
+		"elevation": elev,
+		"height_tier": tier,
+		"base_tile_id": base_tile_id,
+		"top_biome_id": biome_id,
+		"is_high_variant": (tier >= 5),
+		"is_decor_pixel": is_decor,
+		"autotile_mask_4bit": mask_4bit,
+		"has_cliff_shadow": has_cliff_shadow,
+		"is_cliff_rim": is_cliff_rim,
+		"is_shoreline_foam": is_shoreline_foam,
+		"is_wet_sand": is_wet_sand,
+		"zone_id": z_id,
+		"city_id": c_id,
+		"is_zone_border": is_zone_border,
+		"has_road": has_road,
+		"has_field": has_field
+	}
+
+
+func _get_zone_owner(zx: int, zy: int) -> int:
+	if zx < 0 or zx >= ZONE_W or zy < 0 or zy >= ZONE_H:
+		return -1
+	var z_id: int = zy * ZONE_W + zx
+	if z_id >= 0 and z_id < zone_city_id.size() and zone_city_id[z_id] != -1:
+		return zone_city_id[z_id]
+	var gx: int = clampi(int((float(zx) + 0.5) / float(ZONE_W) * float(GRID_W)), 0, GRID_W - 1)
+	var gy: int = clampi(int((float(zy) + 0.5) / float(ZONE_H) * float(GRID_H)), 0, GRID_H - 1)
+	return int(tiles[gy * GRID_W + gx]["city_id"])
+
+
+func _claim_zones_for_tile(city_id: int, t_idx: int) -> Array[int]:
+	var claimed_z: Array[int] = []
+	if t_idx < 0 or t_idx >= TILE_COUNT:
+		return claimed_z
+	var t: Dictionary = tiles[t_idx]
+	var gx: int = int(t["gx"])
+	var gy: int = int(t["gy"])
+	var z_min_x: int = clampi(int(floor(float(gx) / float(GRID_W) * float(ZONE_W))), 0, ZONE_W - 1)
+	var z_max_x: int = clampi(int(ceil(float(gx + 1) / float(GRID_W) * float(ZONE_W))) - 1, z_min_x, ZONE_W - 1)
+	var z_min_y: int = clampi(int(floor(float(gy) / float(GRID_H) * float(ZONE_H))), 0, ZONE_H - 1)
+	var z_max_y: int = clampi(int(ceil(float(gy + 1) / float(GRID_H) * float(ZONE_H))) - 1, z_min_y, ZONE_H - 1)
+
+	for zy in range(z_min_y, z_max_y + 1):
+		for zx in range(z_min_x, z_max_x + 1):
+			var z_id: int = zy * ZONE_W + zx
+			if z_id >= 0 and z_id < zone_city_id.size():
+				zone_city_id[z_id] = city_id
+				claimed_z.append(z_id)
+	return claimed_z
+
+
+func _carve_city_roads_and_fields(city: Dictionary) -> void:
+	if fine_road_overlay.size() != FINE_COUNT:
+		return
+	var c_pos: Vector2 = city["map_pos"]
+	var cx0: int = clampi(int(c_pos.x / MAP_PIXEL_W * float(FINE_W)), 2, FINE_W - 3)
+	var cy0: int = clampi(int(c_pos.y / MAP_PIXEL_H * float(FINE_H)), 2, FINE_H - 3)
+
+	# Центральная мощёная площадь вокруг ратуши (3x3 микро-тайла road #C1997C)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var r_idx: int = (cy0 + dy) * FINE_W + (cx0 + dx)
+			fine_road_overlay[r_idx] = 1
+
+	# Террасные фермерские поля (field #A8663A) рядом с центром полиса
+	for fy in range(-4, -1):
+		for fx in range(-4, 0):
+			var f_px: int = clampi(cx0 + fx, 1, FINE_W - 2)
+			var f_py: int = clampi(cy0 + fy, 1, FINE_H - 2)
+			fine_road_overlay[f_py * FINE_W + f_px] = 2
+
+	# Прокладываем дороги (road #C1997C) от каждого здания к центру города (L-образная трассировка как в WorldBox)
+	var inst_list: Array = city.get("building_instances", [])
+	for b_inst in inst_list:
+		var b_pos: Vector2 = b_inst["map_pos"]
+		var bx: int = clampi(int(b_pos.x / MAP_PIXEL_W * float(FINE_W)), 2, FINE_W - 3)
+		var by: int = clampi(int(b_pos.y / MAP_PIXEL_H * float(FINE_H)), 2, FINE_H - 3)
+		var cur_x: int = bx
+		var cur_y: int = by
+		var steps: int = 0
+		while (cur_x != cx0 or cur_y != cy0) and steps < 64:
+			fine_road_overlay[cur_y * FINE_W + cur_x] = 1
+			if cur_x != cx0 and (steps % 2 == 0 or cur_y == cy0):
+				cur_x += 1 if cx0 > cur_x else -1
+			elif cur_y != cy0:
+				cur_y += 1 if cy0 > cur_y else -1
+			steps += 1
+
+
+func count_road_tiles() -> int:
+	var cnt: int = 0
+	for i in range(fine_road_overlay.size()):
+		if fine_road_overlay[i] == 1:
+			cnt += 1
+	return cnt
+
+
+func count_field_tiles() -> int:
+	var cnt: int = 0
+	for i in range(fine_road_overlay.size()):
+		if fine_road_overlay[i] == 2:
+			cnt += 1
+	return cnt
 
 
 func _seed_initial_cradle() -> void:
@@ -475,6 +843,8 @@ func _seed_initial_cradle() -> void:
 	_paint_biome_cluster(idx_west, "biome_primordial_ocean", 0.15)
 	_paint_biome_cluster(idx_east, "biome_crystal_lattice", 0.18)
 	_paint_biome_cluster(idx_mid, "biome_cybercore", 0.14)
+
+	_populate_fine_flora_and_minerals()
 
 	var sp1_id: int = _spawn_subspecies_at_tile(idx_west, "carbon")
 	_uplift_subspecies_and_found_city(sp1_id, idx_west)
@@ -662,6 +1032,16 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"colonist": "Плывёт основывать дочерний полис"
 	}
 
+	var job_by_role := {
+		"gatherer": "woodcutter",
+		"builder": "builder",
+		"scholar": "road_builder",
+		"miner": "miner",
+		"astronaut": "builder",
+		"warrior": "attacker",
+		"colonist": "builder"
+	}
+
 	var unit_id: int = _next_meta_id
 	_next_meta_id += 1
 	var actor := {
@@ -671,6 +1051,13 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"city_id": city_id,
 		"archetype": sp.get("archetype", "carbon"),
 		"role": role,
+		"job_id": job_by_role.get(role, "woodcutter"),
+		"job_state": "IDLE",
+		"job_timer": 0.0,
+		"target_flora_idx": -1,
+		"carrying": "",
+		"tool_swing": 0.0,
+		"hit_shake": 0.0,
 		"thought": thoughts_by_role.get(role, "Исследует мир"),
 		"pos": start_pos,
 		"target_pos": start_pos,
@@ -679,7 +1066,7 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"hp": 100,
 		"color": sp.get("color", Color.AQUA),
 		"anim_phase": _rng.randf() * TAU,
-		"wait_timer": _rng.randf_range(0.2, 1.5),
+		"wait_timer": _rng.randf_range(0.15, 0.8),
 		"facing_left": _rng.randf() < 0.5
 	}
 	actors.append(actor)
@@ -687,6 +1074,16 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 
 
 func _step_actors(dt: float) -> void:
+	for c_val in cities_map.values():
+		var b_insts: Array = c_val.get("building_instances", [])
+		for b_i in b_insts:
+			var b_sp: float = float(b_i.get("spawn_spring", 1.0))
+			if b_sp < 1.0:
+				b_i["spawn_spring"] = minf(1.0, b_sp + dt * 2.0)
+			var b_sh: float = float(b_i.get("hit_shake", 0.0))
+			if b_sh > 0.0:
+				b_i["hit_shake"] = maxf(0.0, b_sh - dt * 3.5)
+
 	var idx: int = actors.size() - 1
 	while idx >= 0:
 		if idx >= actors.size():
@@ -694,6 +1091,10 @@ func _step_actors(dt: float) -> void:
 			continue
 		var a: Dictionary = actors[idx]
 		a["anim_phase"] = float(a["anim_phase"]) + dt * 9.0
+		var hs: float = float(a.get("hit_shake", 0.0))
+		if hs > 0.0:
+			a["hit_shake"] = maxf(0.0, hs - dt * 4.0)
+
 		var wait_t: float = float(a["wait_timer"]) - dt
 		if wait_t > 0.0:
 			a["wait_timer"] = wait_t
@@ -715,29 +1116,99 @@ func _step_actors(dt: float) -> void:
 					var daughter_id: int = _found_daughter_city(mother_c_id, target_t_idx, int(a["subspecies_id"]), m_cult)
 					a["city_id"] = daughter_id
 					a["role"] = "builder"
+					a["job_id"] = "builder"
 					a["thought"] = "Возводит техно-купол нового полиса"
 				idx -= 1
 				continue
 
 		var home_idx: int = clampi(int(a["home_tile"]), 0, TILE_COUNT - 1)
 		var local_time: float = clampf(float(tiles[home_idx]["time_scale_mult"]), 1.0, 6.0)
-		var move_speed: float = (38.0 if str(a.get("role", "")) == "colonist" else 28.0) * sqrt(local_time)
+		var move_speed: float = (38.0 if str(a.get("role", "")) == "colonist" else 32.0) * sqrt(local_time)
+
+		var c_id: int = int(a.get("city_id", -1))
+		var j_state: String = str(a.get("job_state", "IDLE"))
+		var j_id: String = str(a.get("job_id", "woodcutter"))
+
+		# Цикл задач жителей из WorldBox (ActorJobLibrary: Найти -> Собрать -> Отнести в ратушу -> Построить)
+		if c_id != -1 and cities_map.has(c_id) and str(a.get("role", "")) != "colonist":
+			var city: Dictionary = cities_map[c_id]
+			if j_state == "WORKING":
+				var jt: float = float(a.get("job_timer", 0.0)) - dt * sqrt(local_time)
+				a["job_timer"] = jt
+				a["tool_swing"] = fmod(float(a.get("tool_swing", 0.0)) + dt * 14.0, TAU)
+				var tf_idx: int = int(a.get("target_flora_idx", -1))
+				if tf_idx >= 0 and tf_idx < flora_instances.size():
+					flora_instances[tf_idx]["chop_shake"] = 1.0
+				if jt <= 0.0:
+					a["tool_swing"] = 0.0
+					if j_id == "woodcutter":
+						a["carrying"] = "wood"
+						a["target_pos"] = city["map_pos"]
+						a["job_state"] = "CARRY_TO_STORAGE"
+						a["thought"] = "Несёт бревно на склад полиса"
+					elif j_id == "miner":
+						a["carrying"] = "minerals"
+						a["target_pos"] = city["map_pos"]
+						a["job_state"] = "CARRY_TO_STORAGE"
+						a["thought"] = "Несёт кристаллическую руду в ратушу"
+					elif j_id == "farmer" or j_id == "gatherer_bushes":
+						a["carrying"] = "food"
+						a["target_pos"] = city["map_pos"]
+						a["job_state"] = "CARRY_TO_STORAGE"
+						a["thought"] = "Несёт урожай в хранилище"
+					else:
+						# Строитель / Дорожник завершает участок работ
+						var wx: int = clampi(int(pos.x / MAP_PIXEL_W * float(FINE_W)), 1, FINE_W - 2)
+						var wy: int = clampi(int(pos.y / MAP_PIXEL_H * float(FINE_H)), 1, FINE_H - 2)
+						if fine_road_overlay.size() == FINE_COUNT and sample_elevation_fast(pos.x / MAP_PIXEL_W, pos.y / MAP_PIXEL_H) >= 0.01:
+							fine_road_overlay[wy * FINE_W + wx] = 1
+						total_citizen_tasks_completed += 1
+						a["job_state"] = "IDLE"
+						a["wait_timer"] = _rng.randf_range(0.25, 0.7)
+				idx -= 1
+				continue
+
+			if dist < 8.0:
+				if j_state == "MOVE_TO_TARGET":
+					a["job_state"] = "WORKING"
+					a["job_timer"] = _rng.randf_range(0.45, 0.95)
+					idx -= 1
+					continue
+				elif j_state == "CARRY_TO_STORAGE":
+					if not city.has("storage"):
+						city["storage"] = {"wood": 20, "minerals": 15, "food": 30}
+					var st_dict: Dictionary = city["storage"]
+					var carried: String = str(a.get("carrying", "wood"))
+					if carried != "":
+						st_dict[carried] = int(st_dict.get(carried, 0)) + 2
+						if carried == "minerals":
+							matter_stock += 1.2 * codex_matter_mult
+						elif carried == "wood":
+							matter_stock += 0.8 * codex_matter_mult
+						elif carried == "food":
+							energy_gw += 0.6 * codex_energy_mult
+					a["carrying"] = ""
+					a["target_flora_idx"] = -1
+					a["job_state"] = "IDLE"
+					a["wait_timer"] = _rng.randf_range(0.2, 0.6)
+					total_citizen_tasks_completed += 1
+					idx -= 1
+					continue
+				else:
+					# Назначаем новую задачу из CitizenJobLibrary
+					_assign_next_citizen_job_target(a, city)
+					idx -= 1
+					continue
 
 		if dist < 4.0:
-			# Выбираем новую точку назначения: либо внутри своего города, либо на соседнем тайле суши
-			a["wait_timer"] = _rng.randf_range(0.4, 1.8)
+			# Дикие существа без города просто гуляют по острову
+			a["wait_timer"] = _rng.randf_range(0.4, 1.4)
 			var next_tile_idx: int = home_idx
-			var c_id: int = int(a["city_id"])
-			if c_id != -1 and cities_map.has(c_id):
-				var claimed: Array = cities_map[c_id]["claimed_tiles"]
-				if not claimed.is_empty():
-					next_tile_idx = int(claimed[_rng.randi_range(0, claimed.size() - 1)])
-			else:
-				var nbrs: PackedInt32Array = tiles[home_idx]["neighbors"]
-				if nbrs.size() > 0:
-					var cand: int = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
-					if float(tiles[cand]["elevation"]) >= -0.04:
-						next_tile_idx = cand
+			var nbrs: PackedInt32Array = tiles[home_idx]["neighbors"]
+			if nbrs.size() > 0:
+				var cand: int = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+				if float(tiles[cand]["elevation"]) >= -0.04:
+					next_tile_idx = cand
 
 			a["home_tile"] = next_tile_idx
 			var base_p: Vector2 = tiles[next_tile_idx]["map_pos"]
@@ -752,6 +1223,51 @@ func _step_actors(dt: float) -> void:
 		idx -= 1
 
 	_step_actor_combat(dt)
+
+
+func _assign_next_citizen_job_target(a: Dictionary, city: Dictionary) -> void:
+	var j_id: String = str(a.get("job_id", "woodcutter"))
+	var c_pos: Vector2 = city["map_pos"]
+	a["carrying"] = ""
+	a["target_flora_idx"] = -1
+
+	if (j_id == "woodcutter" or j_id == "miner") and not flora_instances.is_empty():
+		var want_mineral: bool = (j_id == "miner")
+		var best_f_idx: int = -1
+		var best_d: float = 260.0
+		var tries: int = mini(8, flora_instances.size())
+		var start_i: int = _rng.randi_range(0, flora_instances.size() - 1)
+		for k in range(tries):
+			var cand_i: int = (start_i + k * 7) % flora_instances.size()
+			var fl: Dictionary = flora_instances[cand_i]
+			if bool(fl.get("is_mineral", false)) != want_mineral:
+				continue
+			var d: float = (fl["pos"] as Vector2).distance_to(c_pos)
+			if d < best_d:
+				best_d = d
+				best_f_idx = cand_i
+		if best_f_idx != -1:
+			a["target_flora_idx"] = best_f_idx
+			a["target_pos"] = flora_instances[best_f_idx]["pos"]
+			a["job_state"] = "MOVE_TO_TARGET"
+			a["thought"] = "Идёт добывать руду" if want_mineral else "Идёт рубить лес"
+			return
+
+	var b_insts: Array = city.get("building_instances", [])
+	if (j_id == "builder" or j_id == "road_builder") and not b_insts.is_empty():
+		var b_target: Dictionary = b_insts[_rng.randi_range(0, b_insts.size() - 1)]
+		a["target_pos"] = (b_target["map_pos"] as Vector2) + Vector2(_rng.randf_range(-10.0, 10.0), _rng.randf_range(-8.0, 8.0))
+		a["job_state"] = "MOVE_TO_TARGET"
+		a["thought"] = "Мостит дорогу полиса" if j_id == "road_builder" else "Строит здание в зоне полиса"
+		return
+
+	var claimed: Array = city.get("claimed_tiles", [])
+	if not claimed.is_empty():
+		var next_t: int = int(claimed[_rng.randi_range(0, claimed.size() - 1)])
+		a["home_tile"] = next_t
+		a["target_pos"] = (tiles[next_t]["map_pos"] as Vector2) + Vector2(_rng.randf_range(-18.0, 18.0), _rng.randf_range(-12.0, 12.0))
+		a["job_state"] = "MOVE_TO_TARGET"
+		a["thought"] = "Работает на благо полиса"
 
 
 func find_closest_actor(world_pos: Vector2, max_dist: float = 42.0) -> Dictionary:
@@ -1033,6 +1549,8 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 	var c_name: String = "%s-%d" % [city_names[city_id % city_names.size()], cities_map.size() + 1]
 
 	var claimed: Array[int] = [tile_idx]
+	var claimed_zones: Array[int] = []
+	claimed_zones.append_array(_claim_zones_for_tile(city_id, tile_idx))
 	for nbr in t["neighbors"]:
 		if int(tiles[nbr]["city_id"]) == -1:
 			if float(tiles[nbr]["elevation"]) < 0.02:
@@ -1040,6 +1558,7 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 			tiles[nbr]["city_id"] = city_id
 			tiles[nbr]["subspecies_id"] = sp_id
 			claimed.append(nbr)
+			claimed_zones.append_array(_claim_zones_for_tile(city_id, nbr))
 			if claimed.size() >= 5:
 				break
 	t["city_id"] = city_id
@@ -1053,6 +1572,8 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		"map_pos": t["map_pos"],
 		"dir": t["dir"],
 		"claimed_tiles": claimed,
+		"claimed_zones": claimed_zones,
+		"storage": {"wood": 25, "minerals": 20, "food": 35},
 		"population": 28.0,
 		"kardashev_level": 0.60,
 		"science_tier": 1,
@@ -1273,15 +1794,21 @@ func _expand_city_territory(city: Dictionary) -> void:
 		var nbrs: PackedInt32Array = tiles[int(t_idx)]["neighbors"]
 		for n_idx in nbrs:
 			if int(tiles[n_idx]["city_id"]) == -1 and float(tiles[n_idx]["elevation"]) >= -0.04:
-				tiles[n_idx]["city_id"] = int(city["id"])
+				var cid: int = int(city["id"])
+				tiles[n_idx]["city_id"] = cid
 				tiles[n_idx]["subspecies_id"] = int(city["subspecies_id"])
 				claimed.append(n_idx)
+				if not city.has("claimed_zones"):
+					city["claimed_zones"] = []
+				(city["claimed_zones"] as Array).append_array(_claim_zones_for_tile(cid, n_idx))
 				request_dirty_tiles_update([n_idx])
 				planet_surface_changed.emit()
 				return
 
 
 func _rebuild_city_2d_instances(city: Dictionary) -> void:
+	var prev_instances: Array = city.get("building_instances", [])
+	var prev_count: int = prev_instances.size()
 	var instances: Array[Dictionary] = []
 	var center_idx: int = int(city["center_tile"])
 	var center_pos: Vector2 = tiles[center_idx]["map_pos"]
@@ -1305,6 +1832,11 @@ func _rebuild_city_2d_instances(city: Dictionary) -> void:
 			var pos_2d: Vector2 = (tile_anchor.lerp(center_pos, 0.35) + offset_px * 0.45).clamp(
 				Vector2(28.0, 28.0), Vector2(MAP_PIXEL_W - 28.0, MAP_PIXEL_H - 28.0)
 			)
+			var spring_val: float = 1.0
+			if slot_idx < prev_count:
+				spring_val = float(prev_instances[slot_idx].get("spawn_spring", 1.0))
+			elif prev_count > 0:
+				spring_val = 0.08 # Новое здание «выпрыгивает» из земли с пружинящим scale.y (Game Juice из WorldBox)
 			instances.append({
 				"map_pos": pos_2d,
 				"dir": center_dir,
@@ -1312,11 +1844,14 @@ func _rebuild_city_2d_instances(city: Dictionary) -> void:
 				"title": bo.title,
 				"archetype": bo.visual_archetype,
 				"is_orbital": bo.is_orbital,
-				"color": city["color"]
+				"color": city["color"],
+				"spawn_spring": spring_val,
+				"hit_shake": 0.0
 			})
 			slot_idx += 1
 
 	city["building_instances"] = instances
+	_carve_city_roads_and_fields(city)
 
 
 func _layout_offset_2d_pixels(layout: String, idx: int) -> Vector2:
@@ -2661,11 +3196,14 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 	var mother_name_prefix: String = mother["name"].split("-")[0]
 	var c_name: String = "Нова-%s-%d" % [mother_name_prefix, cities_map.size() + 1]
 	var claimed: Array[int] = [tile_idx]
+	var claimed_zones: Array[int] = []
+	claimed_zones.append_array(_claim_zones_for_tile(new_city_id, tile_idx))
 	for nbr in t["neighbors"]:
 		if int(tiles[nbr]["city_id"]) == -1:
 			tiles[nbr]["city_id"] = new_city_id
 			tiles[nbr]["subspecies_id"] = sp_id
 			claimed.append(nbr)
+			claimed_zones.append_array(_claim_zones_for_tile(new_city_id, nbr))
 			if claimed.size() >= 4:
 				break
 	t["city_id"] = new_city_id
@@ -2681,6 +3219,8 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 		"map_pos": t["map_pos"],
 		"dir": t["dir"],
 		"claimed_tiles": claimed,
+		"claimed_zones": claimed_zones,
+		"storage": {"wood": 20, "minerals": 15, "food": 25},
 		"population": 22.0,
 		"kardashev_level": maxf(0.55, float(mother["kardashev_level"]) - 0.08),
 		"science_tier": int(mother.get("science_tier", 1)),
@@ -2715,6 +3255,7 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 
 	colony_founded.emit(new_city_id, mother_city_id, city_rec["name"], t["map_pos"])
 	_log_event("Новый полис! На дальнем острове основана колония «%s» метрополии «%s»!" % [c_name, mother["name"]], "colony", Color(0.4, 0.9, 1.0))
+	request_dirty_tiles_update(claimed)
 	planet_surface_changed.emit()
 	city_structures_changed.emit()
 	return new_city_id

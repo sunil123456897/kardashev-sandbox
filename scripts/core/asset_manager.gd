@@ -59,6 +59,12 @@ var physical_constant_list: Array[SandboxAssetScript.PhysicalConstantAsset] = []
 var alchemical_reactions: Dictionary = {}     # "primary+secondary" -> SandboxAssetScript.AlchemicalReactionAsset
 var alchemical_reaction_list: Array[SandboxAssetScript.AlchemicalReactionAsset] = []
 
+var base_tiles: Dictionary = {}               # id -> SandboxAssetScript.BaseTileAsset (TileLibrary из WorldBox v0.51.2)
+var base_tile_list: Array[SandboxAssetScript.BaseTileAsset] = []
+
+var citizen_jobs: Dictionary = {}             # id -> SandboxAssetScript.CitizenJobAsset (CitizenJobLibrary + ActorJobLibrary из WorldBox v0.51.2)
+var citizen_job_list: Array[SandboxAssetScript.CitizenJobAsset] = []
+
 
 func _init() -> void:
 	init_all()
@@ -97,8 +103,14 @@ func init_all() -> void:
 	physical_constant_list.clear()
 	alchemical_reactions.clear()
 	alchemical_reaction_list.clear()
+	base_tiles.clear()
+	base_tile_list.clear()
+	citizen_jobs.clear()
+	citizen_job_list.clear()
 
+	_init_base_tiles()
 	_init_biomes()
+	_init_citizen_jobs()
 	_init_subspecies_traits()
 	_init_culture_traits()
 	_init_ethos_traits()
@@ -258,15 +270,17 @@ func get_all_alchemical_reactions() -> Array[SandboxAssetScript.AlchemicalReacti
 
 
 # ==============================================================================
-# 1. BIOME LIBRARY (8 научно-фантастических биомов)
+# 1. BIOME LIBRARY (8 биомов с точными HEX-палитрами TopTileLibrary из WorldBox v0.51.2)
 # ==============================================================================
 func _init_biomes() -> void:
 	var b0 := SandboxAssetScript.BiomeAsset.new()
 	b0.id = "biome_barren_crust"
-	b0.title = "Базальтовая Кора"
-	b0.description = "Первичная каменная пустошь с редкими кратерами и залежами руд."
-	b0.base_color_low = Color(0.16, 0.17, 0.21)
-	b0.base_color_high = Color(0.28, 0.30, 0.35)
+	b0.title = "Базальтовая Саванна"
+	b0.description = "Сухая золотисто-терракотовая степь с выходами руды (savanna_low #F0B121 / savanna_high #CF931B из WorldBox)."
+	b0.base_color_low = Color.html("#F0B121")
+	b0.base_color_high = Color.html("#CF931B")
+	b0.edge_color = Color.html("#B66F3A")
+	b0.decor_color = Color.html("#E2934B")
 	b0.ideal_temp_c = 5.0
 	b0.matter_yield = 1.2
 	b0.energy_yield = 0.8
@@ -279,11 +293,13 @@ func _init_biomes() -> void:
 
 	var b1 := SandboxAssetScript.BiomeAsset.new()
 	b1.id = "biome_primordial_ocean"
-	b1.title = "Первичный Био-Океан"
-	b1.description = "Тёплые органические моря и биолюминесцентные террасы — колыбель углеродной жизни."
-	b1.base_color_low = Color(0.06, 0.28, 0.42)
-	b1.base_color_high = Color(0.12, 0.55, 0.44)
-	b1.emissive_color = Color(0.0, 0.85, 0.65)
+	b1.title = "Изумрудная Био-Терраса"
+	b1.description = "Сочные луга, тропические рощи и тёплые лагуны — колыбель углеродной жизни (grass_low #7EAF46 / grass_high #5F833C из WorldBox)."
+	b1.base_color_low = Color.html("#7EAF46")
+	b1.base_color_high = Color.html("#5F833C")
+	b1.edge_color = Color.html("#46A052")
+	b1.decor_color = Color.html("#8CDC6A")
+	b1.emissive_color = Color.html("#54CC3A")
 	b1.emissive_strength = 0.25
 	b1.ideal_temp_c = 24.0
 	b1.matter_yield = 1.1
@@ -297,11 +313,13 @@ func _init_biomes() -> void:
 
 	var b2 := SandboxAssetScript.BiomeAsset.new()
 	b2.id = "biome_cryo_superconductor"
-	b2.title = "Крио-Сверхпроводник"
-	b2.description = "Ледники из металлического водорода и сверхтекучего гелия. Идеальная среда для квантовых умов."
-	b2.base_color_low = Color(0.14, 0.36, 0.68)
-	b2.base_color_high = Color(0.55, 0.86, 0.98)
-	b2.emissive_color = Color(0.25, 0.78, 1.0)
+	b2.title = "Крио-Мерзлота"
+	b2.description = "Снежные равнины и сверхпроводящие ледники (permafrost_low #99BCDB / permafrost_high #B4CFE5 из WorldBox)."
+	b2.base_color_low = Color.html("#99BCDB")
+	b2.base_color_high = Color.html("#B4CFE5")
+	b2.edge_color = Color.html("#7BA3C7")
+	b2.decor_color = Color.html("#FCFDFD")
+	b2.emissive_color = Color.html("#AFF5F1")
 	b2.emissive_strength = 0.45
 	b2.ideal_temp_c = -140.0
 	b2.matter_yield = 0.9
@@ -315,11 +333,13 @@ func _init_biomes() -> void:
 
 	var b3 := SandboxAssetScript.BiomeAsset.new()
 	b3.id = "biome_actinide_wasteland"
-	b3.title = "Актинидный Кратер"
-	b3.description = "Обогащённая ураном и торием зона удара. Вызывает быстрые мутации и толкает расы к ядерной физике."
-	b3.base_color_low = Color(0.18, 0.24, 0.10)
-	b3.base_color_high = Color(0.42, 0.65, 0.16)
-	b3.emissive_color = Color(0.45, 1.0, 0.15)
+	b3.title = "Актинидная Пустошь"
+	b3.description = "Обогащённая ураном и кислотными жилами зона (wasteland_low #849371 / wasteland_high #6C7759 + lemon #D1E771 из WorldBox)."
+	b3.base_color_low = Color.html("#849371")
+	b3.base_color_high = Color.html("#6C7759")
+	b3.edge_color = Color.html("#556338")
+	b3.decor_color = Color.html("#D1E771")
+	b3.emissive_color = Color.html("#93CF3A")
 	b3.emissive_strength = 0.65
 	b3.ideal_temp_c = 65.0
 	b3.radiation_level = 0.85
@@ -335,11 +355,13 @@ func _init_biomes() -> void:
 
 	var b4 := SandboxAssetScript.BiomeAsset.new()
 	b4.id = "biome_crystal_lattice"
-	b4.title = "Пьезо-Кристаллическая Решётка"
-	b4.description = "Леса из кремниево-фотонныx кристаллов, резонирующих с магнитным полем планеты."
-	b4.base_color_low = Color(0.28, 0.12, 0.45)
-	b4.base_color_high = Color(0.68, 0.28, 0.88)
-	b4.emissive_color = Color(0.82, 0.32, 1.0)
+	b4.title = "Кристаллическая Решётка"
+	b4.description = "Сверкающие бирюзово-кварцевые поля (crystal_low #68EADE / crystal_high #5FD6CB из WorldBox)."
+	b4.base_color_low = Color.html("#68EADE")
+	b4.base_color_high = Color.html("#5FD6CB")
+	b4.edge_color = Color.html("#49AB87")
+	b4.decor_color = Color.html("#B573DA")
+	b4.emissive_color = Color.html("#AFF5F1")
 	b4.emissive_strength = 0.55
 	b4.ideal_temp_c = 10.0
 	b4.matter_yield = 1.8
@@ -353,11 +375,13 @@ func _init_biomes() -> void:
 
 	var b5 := SandboxAssetScript.BiomeAsset.new()
 	b5.id = "biome_cybercore"
-	b5.title = "Кибер-Ядро (Техно-Панцирь)"
-	b5.description = "Самовоспроизводящаяся сеть нано-фабрик и вычислительных сот (аналог biome_cybertile из WorldBox)."
-	b5.base_color_low = Color(0.08, 0.14, 0.18)
-	b5.base_color_high = Color(0.16, 0.38, 0.46)
-	b5.emissive_color = Color(0.0, 0.92, 1.0)
+	b5.title = "Кибер-Ядро (CyberTile)"
+	b5.description = "Самовоспроизводящаяся сеть нано-фабрик и вычислительных сот (cybertile_low #9EA6A3 / cybertile_high #858886 из WorldBox)."
+	b5.base_color_low = Color.html("#9EA6A3")
+	b5.base_color_high = Color.html("#858886")
+	b5.edge_color = Color.html("#5B5E5C")
+	b5.decor_color = Color.html("#00EBFF")
+	b5.emissive_color = Color.html("#00EBFF")
 	b5.emissive_strength = 0.75
 	b5.ideal_temp_c = 0.0
 	b5.matter_yield = 2.2
@@ -372,11 +396,13 @@ func _init_biomes() -> void:
 
 	var b6 := SandboxAssetScript.BiomeAsset.new()
 	b6.id = "biome_plasma_inferno"
-	b6.title = "Магнито-Плазменный Разлом"
-	b6.description = "Океаны жидкой лавы и солнечной плазмы, удерживаемые магнитными дугами."
-	b6.base_color_low = Color(0.45, 0.08, 0.02)
-	b6.base_color_high = Color(0.98, 0.42, 0.06)
-	b6.emissive_color = Color(1.0, 0.48, 0.08)
+	b6.title = "Инфернальный Разлом"
+	b6.description = "Раскалённые базальтовые поля и лавовые жилы (infernal_low #9C3626 / infernal_high #68372D + lava #FF6700 из WorldBox)."
+	b6.base_color_low = Color.html("#9C3626")
+	b6.base_color_high = Color.html("#68372D")
+	b6.edge_color = Color.html("#4B2E1B")
+	b6.decor_color = Color.html("#FF6700")
+	b6.emissive_color = Color.html("#FFAC00")
 	b6.emissive_strength = 0.90
 	b6.ideal_temp_c = 420.0
 	b6.radiation_level = 0.65
@@ -392,11 +418,13 @@ func _init_biomes() -> void:
 
 	var b7 := SandboxAssetScript.BiomeAsset.new()
 	b7.id = "biome_singularity_swamp"
-	b7.title = "Квантово-Темпоральная Аномалия"
-	b7.description = "Искривлённый сектор пространства-времени (biome_singularity + biome_paradox из WorldBox)."
-	b7.base_color_low = Color(0.06, 0.02, 0.16)
-	b7.base_color_high = Color(0.38, 0.14, 0.72)
-	b7.emissive_color = Color(0.65, 0.25, 1.0)
+	b7.title = "Сингулярная Аномалия"
+	b7.description = "Искривлённый сектор пространства-времени (singularity_low #623079 / singularity_high #502263 + celestial #B573DA из WorldBox)."
+	b7.base_color_low = Color.html("#623079")
+	b7.base_color_high = Color.html("#502263")
+	b7.edge_color = Color.html("#3D184C")
+	b7.decor_color = Color.html("#B573DA")
+	b7.emissive_color = Color.html("#B573DA")
 	b7.emissive_strength = 0.95
 	b7.ideal_temp_c = -40.0
 	b7.gravity_mod = 0.25
@@ -1910,4 +1938,138 @@ func _init_alchemical_matrix() -> void:
 	r7.matter_yield = 85.0
 	r7.sfx_id = "sfx_transmutation"
 	_add_alchemical_reaction(r7)
+
+
+# ==============================================================================
+# 9. TILE LIBRARY (Точные базовые уровни высот и жидкостей из WorldBox v0.51.2)
+# ==============================================================================
+func _add_base_tile(bt: SandboxAssetScript.BaseTileAsset) -> void:
+	bt.index_id = base_tile_list.size()
+	bt.color = Color.html(bt.color_hex)
+	base_tiles[bt.id] = bt
+	base_tile_list.append(bt)
+
+
+func _init_base_tiles() -> void:
+	var defs := [
+		["deep_ocean", "Глубокий Океан", "#3370CC", "#25549E", 0, true, true, false, 0.35],
+		["close_ocean", "Средний Океан", "#4084E2", "#3370CC", 1, true, true, false, 0.45],
+		["shallow_waters", "Мелководная Лагуна", "#55AEF0", "#3F90EA", 2, true, true, false, 0.65],
+		["sand", "Песчаный Берег", "#F7E898", "#D8C08C", 3, false, false, true, 0.90],
+		["soil_low", "Низинная Почва", "#E2934B", "#B66F3A", 4, false, false, true, 1.00],
+		["soil_high", "Высокая Терраса", "#B66F3A", "#8F5428", 5, false, false, true, 1.00],
+		["hills", "Каменные Холмы", "#5B5E5C", "#414545", 6, false, false, false, 0.75],
+		["mountains", "Горный Хребет", "#414545", "#333333", 7, false, false, false, 0.40],
+		["summit", "Заснеженный Пик", "#333333", "#FCFDFD", 8, false, false, false, 0.25],
+		["road", "Мощёная Дорога", "#C1997C", "#9E785E", 4, false, false, true, 1.35],
+		["field", "Фермерская Пашня", "#A8663A", "#834C4C", 4, false, false, true, 0.95],
+		["wall_order", "Каменная Стена", "#A7B2B7", "#8B9396", 6, false, false, false, 0.0],
+		["lava0", "Магматический Разлом", "#F62D14", "#FF6700", 2, true, false, false, 0.30],
+		["lava1", "Активная Лава", "#FF6700", "#FFAC00", 2, true, false, false, 0.30],
+		["lava2", "Раскалённая Плазма", "#FFAC00", "#FFDE00", 2, true, false, false, 0.30]
+	]
+	for d in defs:
+		var bt := SandboxAssetScript.BaseTileAsset.new()
+		bt.id = d[0]
+		bt.title = d[1]
+		bt.color_hex = d[2]
+		bt.edge_color_hex = d[3]
+		bt.height_tier = int(d[4])
+		bt.is_liquid = bool(d[5])
+		bt.is_ocean = bool(d[6])
+		bt.can_build = bool(d[7])
+		bt.walk_speed_mult = float(d[8])
+		_add_base_tile(bt)
+
+
+# ==============================================================================
+# 10. CITIZEN JOB LIBRARY (Циклы задач жителей из CitizenJobLibrary / ActorJobLibrary WorldBox v0.51.2)
+# ==============================================================================
+func _add_citizen_job(cj: SandboxAssetScript.CitizenJobAsset) -> void:
+	cj.index_id = citizen_job_list.size()
+	citizen_jobs[cj.id] = cj
+	citizen_job_list.append(cj)
+
+
+func _init_citizen_jobs() -> void:
+	var j_wood := SandboxAssetScript.CitizenJobAsset.new()
+	j_wood.id = "woodcutter"
+	j_wood.title = "Лесоруб"
+	j_wood.task_steps = ["find_tree", "move_to_target", "chop_trees", "carry_to_storage", "end_job"]
+	j_wood.target_type = "flora"
+	j_wood.produced_resource = "wood"
+	j_wood.work_duration = 1.4
+	j_wood.tool_sprite = "axe"
+	_add_citizen_job(j_wood)
+
+	var j_miner := SandboxAssetScript.CitizenJobAsset.new()
+	j_miner.id = "miner"
+	j_miner.title = "Рудокоп"
+	j_miner.task_steps = ["find_mineral", "move_to_target", "mine_deposit", "carry_to_storage", "end_job"]
+	j_miner.target_type = "mineral"
+	j_miner.produced_resource = "minerals"
+	j_miner.work_duration = 1.6
+	j_miner.tool_sprite = "pickaxe"
+	_add_citizen_job(j_miner)
+
+	var j_builder := SandboxAssetScript.CitizenJobAsset.new()
+	j_builder.id = "builder"
+	j_builder.title = "Строитель"
+	j_builder.task_steps = ["find_build_site", "move_to_target", "try_build_building", "end_job"]
+	j_builder.target_type = "building_site"
+	j_builder.produced_resource = "building"
+	j_builder.work_duration = 1.5
+	j_builder.tool_sprite = "hammer"
+	_add_citizen_job(j_builder)
+
+	var j_road := SandboxAssetScript.CitizenJobAsset.new()
+	j_road.id = "road_builder"
+	j_road.title = "Дорожник"
+	j_road.task_steps = ["find_road_site", "move_to_target", "build_road", "end_job"]
+	j_road.target_type = "road_site"
+	j_road.produced_resource = "road"
+	j_road.work_duration = 1.0
+	j_road.tool_sprite = "hammer"
+	_add_citizen_job(j_road)
+
+	var j_farm := SandboxAssetScript.CitizenJobAsset.new()
+	j_farm.id = "farmer"
+	j_farm.title = "Фермер"
+	j_farm.task_steps = ["farmer_make_field", "farmer_plant_crops", "farmer_harvest", "carry_to_storage", "end_job"]
+	j_farm.target_type = "field_tile"
+	j_farm.produced_resource = "food"
+	j_farm.work_duration = 1.5
+	j_farm.tool_sprite = "hoe"
+	_add_citizen_job(j_farm)
+
+	var j_gather := SandboxAssetScript.CitizenJobAsset.new()
+	j_gather.id = "gatherer_bushes"
+	j_gather.title = "Собиратель"
+	j_gather.task_steps = ["find_bush", "move_to_target", "collect_fruits", "carry_to_storage", "end_job"]
+	j_gather.target_type = "flora"
+	j_gather.produced_resource = "food"
+	j_gather.work_duration = 1.2
+	j_gather.tool_sprite = "basket"
+	_add_citizen_job(j_gather)
+
+	var j_hunt := SandboxAssetScript.CitizenJobAsset.new()
+	j_hunt.id = "hunter"
+	j_hunt.title = "Охотник"
+	j_hunt.task_steps = ["random_move", "do_hunting", "carry_to_storage", "end_job"]
+	j_hunt.target_type = "flora"
+	j_hunt.produced_resource = "food"
+	j_hunt.work_duration = 1.5
+	j_hunt.tool_sprite = "spear"
+	_add_citizen_job(j_hunt)
+
+	var j_atk := SandboxAssetScript.CitizenJobAsset.new()
+	j_atk.id = "attacker"
+	j_atk.title = "Защитник Полиса"
+	j_atk.task_steps = ["make_decision", "patrol_zone", "engage_threat", "end_job"]
+	j_atk.target_type = "enemy"
+	j_atk.produced_resource = "security"
+	j_atk.work_duration = 1.2
+	j_atk.tool_sprite = "spear"
+	_add_citizen_job(j_atk)
+
 

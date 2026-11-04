@@ -18,6 +18,8 @@ var index_id: int = 0
 class BiomeAsset extends SandboxAsset:
 	var base_color_low: Color = Color(0.12, 0.16, 0.22)
 	var base_color_high: Color = Color(0.22, 0.28, 0.36)
+	var edge_color: Color = Color(0.10, 0.14, 0.18)
+	var decor_color: Color = Color(0.35, 0.48, 0.30)
 	var emissive_color: Color = Color(0.0, 0.0, 0.0)
 	var emissive_strength: float = 0.0
 	var ideal_temp_c: float = 15.0
@@ -199,4 +201,25 @@ class WorldLawAsset extends SandboxAsset:
 class WorldBehaviourAsset extends SandboxAsset:
 	var interval: float = 1.0
 	var stop_when_paused: bool = true
+
+
+class BaseTileAsset extends SandboxAsset:
+	## Базовый уровень рельефа (реверс-инженеринг TileLibrary / TileType из WorldBox v0.51.2).
+	var color_hex: String = "#3370CC"
+	var edge_color_hex: String = "#2858A4"
+	var height_tier: int = 0 # 0=deep_ocean, 1=close_ocean, 2=shallow_waters, 3=sand, 4=soil_low, 5=soil_high, 6=hills, 7=mountains, 8=summit
+	var is_liquid: bool = false
+	var is_ocean: bool = false
+	var can_build: bool = true
+	var walk_speed_mult: float = 1.0
+
+
+class CitizenJobAsset extends SandboxAsset:
+	## Профессия и цепочка задач жителя полиса (реверс-инженеринг CitizenJobLibrary + ActorJobLibrary из WorldBox v0.51.2).
+	var task_steps: Array[String] = [] # e.g. ["find_tree", "move_to_target", "chop_trees", "carry_to_storage", "end_job"]
+	var target_type: String = "flora" # flora, mineral, building_site, road_site, field_tile, enemy
+	var produced_resource: String = "wood" # wood, minerals, food, road, building
+	var work_duration: float = 1.6
+	var tool_sprite: String = "axe" # axe, pickaxe, hammer, hoe, spear, scanner
+
 

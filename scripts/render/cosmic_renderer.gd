@@ -50,7 +50,43 @@ var _brush_color: Color = Color(0.25, 0.88, 1.0)
 # Счётчики отрисованных объектов для авто-тестов и телеметрии
 var rendered_building_count: int = 0
 var rendered_actor_count: int = 0
+var rendered_flora_count: int = 0
 var rendered_dyson_sail_count: int = 0
+
+# Слои GPU-инстансинга в стиле WorldBox (MultiMeshInstance2D + worldbox_multimesh.gdshader)
+var _map_bg_rect: TextureRect
+var _mm_flora: MultiMeshInstance2D
+var _mm_buildings: MultiMeshInstance2D
+var _mm_actors: MultiMeshInstance2D
+var _mm_flora_material: ShaderMaterial
+var _mm_buildings_material: ShaderMaterial
+var _mm_actors_material: ShaderMaterial
+var _atlas_flora_tex: ImageTexture
+var _atlas_building_tex: ImageTexture
+var _atlas_actor_tex: ImageTexture
+var _flora_type_to_col: Dictionary = {}
+var _building_arch_to_col: Dictionary = {}
+var _actor_key_to_col: Dictionary = {}
+
+# Палитра базовых тайлов WorldBox v0.51.2 (из декомпилированного TileLibrary)
+const WB_DEEP_OCEAN := Color(0.200, 0.439, 0.800)      # #3370CC
+const WB_ABYSS_OCEAN := Color(0.161, 0.353, 0.651)     # #295AA6
+const WB_CLOSE_OCEAN := Color(0.251, 0.518, 0.886)     # #4084E2
+const WB_SHALLOW_WATERS := Color(0.333, 0.682, 0.941)  # #55AEF0
+const WB_SHORE_FOAM := Color(0.604, 0.973, 1.000)      # #9AF8FF
+const WB_SAND := Color(0.969, 0.910, 0.596)            # #F7E898
+const WB_SAND_WET := Color(0.847, 0.753, 0.549)        # #D8C08C
+const WB_SOIL_LOW := Color(0.886, 0.576, 0.294)        # #E2934B
+const WB_SOIL_HIGH := Color(0.714, 0.435, 0.227)       # #B66F3A
+const WB_HILLS := Color(0.357, 0.369, 0.361)           # #5B5E5C
+const WB_HILLS_EDGE := Color(0.427, 0.439, 0.431)      # #6D706E
+const WB_MOUNTAINS := Color(0.255, 0.271, 0.271)       # #414545
+const WB_SUMMIT := Color(0.200, 0.200, 0.200)          # #333333
+const WB_SUMMIT_SNOW := Color(0.886, 0.929, 0.969)     # #E2EDF7
+const WB_ROAD := Color(0.757, 0.600, 0.486)            # #C1997C
+const WB_ROAD_EDGE := Color(0.678, 0.525, 0.420)       # #AD866B
+const WB_FIELD := Color(0.659, 0.400, 0.227)           # #A8663A
+const WB_FIELD_FURROW := Color(0.557, 0.325, 0.173)    # #8E532C
 
 # Шейдерные ноды, материалы и телеметрия F8
 var _dyson_aura_rect: ColorRect
@@ -86,6 +122,7 @@ func setup(simulation: WorldSimulationScript) -> void:
 
 	_build_pixel_art_sprites()
 	_init_space_backdrop()
+	_init_multimesh_layers()
 	_init_shaders()
 
 	_map_image = Image.create(TEX_W, TEX_H, false, Image.FORMAT_RGBA8)
@@ -104,7 +141,224 @@ func setup(simulation: WorldSimulationScript) -> void:
 		sim.dirty_rect_requested.connect(_on_dirty_rect_requested)
 
 	_refresh_counts()
+	_update_multimeshes(0.0)
 	queue_redraw()
+
+
+func _create_2d_quad_mesh(w: float, h: float) -> ArrayMesh:
+	var hw: float = w * 0.5
+	var hh: float = h * 0.5
+	var verts := PackedVector2Array([
+		Vector2(-hw, -hh),
+		Vector2(hw, -hh),
+		Vector2(hw, hh),
+		Vector2(-hw, -hh),
+		Vector2(hw, hh),
+		Vector2(-hw, hh)
+	])
+	var uvs := PackedVector2Array([
+		Vector2(0.0, 0.0),
+		Vector2(1.0, 0.0),
+		Vector2(1.0, 1.0),
+		Vector2(0.0, 0.0),
+		Vector2(1.0, 1.0),
+		Vector2(0.0, 1.0)
+	])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _init_multimesh_layers() -> void:
+	# 0. Полноэкранный пиксельный фон карты (show_behind_parent = true, рисуется первым)
+	if _map_bg_rect == null:
+		_map_bg_rect = TextureRect.new()
+		_map_bg_rect.name = "WorldBoxMapBgRect"
+		_map_bg_rect.position = Vector2.ZERO
+		_map_bg_rect.size = Vector2(1920.0, 1080.0)
+		_map_bg_rect.stretch_mode = TextureRect.STRETCH_SCALE
+		_map_bg_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_map_bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_map_bg_rect.show_behind_parent = true
+		add_child(_map_bg_rect)
+
+	var wb_shader: Shader = load("res://shaders/worldbox_multimesh.gdshader") as Shader
+
+	# 1. MultiMeshInstance2D для Флоры и Рудных Залежей (~480 объектов)
+	if _mm_flora == null:
+		_mm_flora = MultiMeshInstance2D.new()
+		_mm_flora.name = "MultiMeshFlora"
+		_mm_flora.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_mm_flora.show_behind_parent = true
+		_mm_flora.texture = _atlas_flora_tex
+		var mm_f := MultiMesh.new()
+		mm_f.transform_format = MultiMesh.TRANSFORM_2D
+		mm_f.use_colors = true
+		mm_f.use_custom_data = true
+		mm_f.mesh = _create_2d_quad_mesh(20.0, 20.0)
+		mm_f.instance_count = 0
+		_mm_flora.multimesh = mm_f
+		if wb_shader != null:
+			_mm_flora_material = ShaderMaterial.new()
+			_mm_flora_material.shader = wb_shader
+			_mm_flora_material.set_shader_parameter("atlas_cols", 10.0)
+			_mm_flora_material.set_shader_parameter("sway_strength", 2.1)
+			_mm_flora.material = _mm_flora_material
+		add_child(_mm_flora)
+
+	# 2. MultiMeshInstance2D для Зданий Полисов (пружинящий scale.y при постройке)
+	if _mm_buildings == null:
+		_mm_buildings = MultiMeshInstance2D.new()
+		_mm_buildings.name = "MultiMeshBuildings"
+		_mm_buildings.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_mm_buildings.show_behind_parent = true
+		_mm_buildings.texture = _atlas_building_tex
+		var mm_b := MultiMesh.new()
+		mm_b.transform_format = MultiMesh.TRANSFORM_2D
+		mm_b.use_colors = true
+		mm_b.use_custom_data = true
+		mm_b.mesh = _create_2d_quad_mesh(26.0, 26.0)
+		mm_b.instance_count = 0
+		_mm_buildings.multimesh = mm_b
+		if wb_shader != null:
+			_mm_buildings_material = ShaderMaterial.new()
+			_mm_buildings_material.shader = wb_shader
+			_mm_buildings_material.set_shader_parameter("atlas_cols", 8.0)
+			_mm_buildings_material.set_shader_parameter("sway_strength", 0.0)
+			_mm_buildings.material = _mm_buildings_material
+		add_child(_mm_buildings)
+
+	# 3. MultiMeshInstance2D для Жителей (2 кадра шага, покачивание, вспышка удара)
+	if _mm_actors == null:
+		_mm_actors = MultiMeshInstance2D.new()
+		_mm_actors.name = "MultiMeshActors"
+		_mm_actors.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_mm_actors.show_behind_parent = true
+		_mm_actors.texture = _atlas_actor_tex
+		var mm_a := MultiMesh.new()
+		mm_a.transform_format = MultiMesh.TRANSFORM_2D
+		mm_a.use_colors = true
+		mm_a.use_custom_data = true
+		mm_a.mesh = _create_2d_quad_mesh(16.0, 16.0)
+		mm_a.instance_count = 0
+		_mm_actors.multimesh = mm_a
+		if wb_shader != null:
+			_mm_actors_material = ShaderMaterial.new()
+			_mm_actors_material.shader = wb_shader
+			_mm_actors_material.set_shader_parameter("atlas_cols", 10.0)
+			_mm_actors_material.set_shader_parameter("sway_strength", 0.0)
+			_mm_actors.material = _mm_actors_material
+		add_child(_mm_actors)
+
+
+func _sync_multimesh_visibility() -> void:
+	var vis: bool = (view_mode == 0)
+	if _map_bg_rect != null:
+		_map_bg_rect.visible = vis
+	if _mm_flora != null:
+		_mm_flora.visible = vis
+	if _mm_buildings != null:
+		_mm_buildings.visible = vis
+	if _mm_actors != null:
+		_mm_actors.visible = vis
+
+
+func _update_multimeshes(_delta: float) -> void:
+	if sim == null:
+		return
+	_sync_multimesh_visibility()
+
+	# 1. Флора и минеральные жилы
+	if _mm_flora != null and _mm_flora.multimesh != null:
+		var mm_f: MultiMesh = _mm_flora.multimesh
+		var f_list: Array = sim.flora_instances
+		var f_cnt: int = f_list.size()
+		if mm_f.instance_count != f_cnt:
+			mm_f.instance_count = f_cnt
+		for i in range(f_cnt):
+			var fl: Dictionary = f_list[i]
+			var f_pos: Vector2 = fl["pos"]
+			var f_type: String = str(fl.get("type", "bio_tree"))
+			var col_idx: float = float(_flora_type_to_col.get(f_type, 0))
+			var is_min: bool = bool(fl.get("is_mineral", false))
+			var sway_ph: float = 0.0 if is_min else maxf(0.05, float(fl.get("sway_phase", 0.5)))
+			var chop_sh: float = clampf(float(fl.get("chop_shake", 0.0)), 0.0, 1.0)
+			var sp_spr: float = clampf(float(fl.get("spawn_spring", 1.0)), 0.05, 1.0)
+			if _delta > 0.0:
+				if chop_sh > 0.0:
+					chop_sh = maxf(0.0, chop_sh - _delta * 3.5)
+					fl["chop_shake"] = chop_sh
+				if sp_spr < 1.0:
+					sp_spr = minf(1.0, sp_spr + _delta * 2.2)
+					fl["spawn_spring"] = sp_spr
+
+			mm_f.set_instance_transform_2d(i, Transform2D(0.0, f_pos + Vector2(0.0, -4.0)))
+			mm_f.set_instance_color(i, Color.WHITE)
+			mm_f.set_instance_custom_data(i, Color(sway_ph, chop_sh, sp_spr, col_idx))
+
+			# Если рубят дерево или дробят кристалл — спавним пиксельные щепки с гравитацией
+			if chop_sh > 0.88 and _particles.size() < 220 and ((i + int(_anim_time * 60.0)) % 5 == 0):
+				var chip_col := Color(0.35, 0.92, 0.88) if is_min else Color(0.28, 0.78, 0.36)
+				_particles.append({
+					"pos": f_pos + Vector2(randf_range(-4.0, 4.0), -6.0),
+					"vel": Vector2(randf_range(-38.0, 38.0), randf_range(-65.0, -25.0)),
+					"gravity": 260.0,
+					"ground_y": f_pos.y + randf_range(-2.0, 5.0),
+					"color": chip_col,
+					"size": 3.0,
+					"life": 0.42,
+					"max_life": 0.42
+				})
+
+	# 2. Здания городов
+	if _mm_buildings != null and _mm_buildings.multimesh != null:
+		var mm_b: MultiMesh = _mm_buildings.multimesh
+		var total_b: int = 0
+		for c_id in sim.cities_map.keys():
+			total_b += (sim.cities_map[c_id]["building_instances"] as Array).size()
+		if mm_b.instance_count != total_b:
+			mm_b.instance_count = total_b
+		var b_idx: int = 0
+		for c_id in sim.cities_map.keys():
+			var city: Dictionary = sim.cities_map[c_id]
+			var c_col: Color = city["color"]
+			var tint: Color = Color.WHITE.lerp(c_col.lightened(0.35), 0.35)
+			var inst_list: Array = city["building_instances"]
+			for b_inst in inst_list:
+				var b_pos: Vector2 = b_inst["map_pos"]
+				var arch: String = str(b_inst.get("archetype", "dome"))
+				var col_idx: float = float(_building_arch_to_col.get(arch, 0))
+				var sp_spr: float = clampf(float(b_inst.get("spawn_spring", 1.0)), 0.05, 1.0)
+				var hit_sh: float = clampf(float(b_inst.get("hit_shake", 0.0)), 0.0, 1.0)
+				mm_b.set_instance_transform_2d(b_idx, Transform2D(0.0, b_pos + Vector2(0.0, -3.0)))
+				mm_b.set_instance_color(b_idx, tint)
+				mm_b.set_instance_custom_data(b_idx, Color(0.0, hit_sh, sp_spr, col_idx))
+				b_idx += 1
+
+	# 3. Живые человечки и существа (Actors)
+	if _mm_actors != null and _mm_actors.multimesh != null:
+		var mm_a: MultiMesh = _mm_actors.multimesh
+		var a_cnt: int = sim.actors.size()
+		if mm_a.instance_count != a_cnt:
+			mm_a.instance_count = a_cnt
+		var frame_tick: int = int(_anim_time * 5.0) % 2
+		for i in range(a_cnt):
+			var a: Dictionary = sim.actors[i]
+			var a_pos: Vector2 = a["pos"]
+			var arch: String = str(a.get("archetype", "carbon"))
+			var u_frame: int = (frame_tick + int(a.get("id", i))) % 2
+			var col_idx: float = float(_actor_key_to_col.get("%s_%d" % [arch, u_frame], 0))
+			var flip_x: float = -1.0 if bool(a.get("facing_left", false)) else 1.0
+			var xf := Transform2D(Vector2(flip_x, 0.0), Vector2(0.0, 1.0), a_pos + Vector2(0.0, -2.0))
+			var walk_ph: float = -maxf(0.02, float(a.get("anim_phase", 0.5)))
+			var hit_fl: float = 0.85 if str(a.get("job_state", "")) == "WORKING" and sin(float(a.get("tool_swing", 0.0))) > 0.7 else 0.0
+			mm_a.set_instance_transform_2d(i, xf)
+			mm_a.set_instance_color(i, Color.WHITE)
+			mm_a.set_instance_custom_data(i, Color(walk_ph, hit_fl * 0.35, 1.0, col_idx))
 
 
 func _init_shaders() -> void:
@@ -139,6 +393,7 @@ func set_view_mode(mode: int) -> void:
 	view_mode = mode
 	if _dyson_aura_rect != null:
 		_dyson_aura_rect.visible = (view_mode == 1)
+	_sync_multimesh_visibility()
 	queue_redraw()
 
 
@@ -176,6 +431,7 @@ func _process(delta: float) -> void:
 			_particles.append({
 				"pos": pos + Vector2(randf_range(-3.0, 3.0), 10.0),
 				"vel": Vector2(randf_range(-18.0, 18.0), randf_range(25.0, 55.0)),
+				"gravity": -30.0,
 				"color": Color(1.0, 0.65, 0.18, 0.95),
 				"size": 4.0,
 				"life": 0.35,
@@ -184,10 +440,21 @@ func _process(delta: float) -> void:
 		if float(r["life"]) <= 0.0 or pos.y < 75.0:
 			_active_rockets.remove_at(i)
 
-	# Обновляем пиксельные частицы ударов и взрывов
+	# Обновляем физические пиксельные частицы с гравитацией и отскоком от земли (WorldBox Pixel Debris)
 	for i in range(_particles.size() - 1, -1, -1):
 		var p: Dictionary = _particles[i]
-		p["pos"] = (p["pos"] as Vector2) + (p["vel"] as Vector2) * delta
+		var vel: Vector2 = p["vel"]
+		var grav: float = float(p.get("gravity", 240.0))
+		vel.y += grav * delta
+		var pos: Vector2 = (p["pos"] as Vector2) + vel * delta
+		if p.has("ground_y"):
+			var gy: float = float(p["ground_y"])
+			if pos.y >= gy and vel.y > 0.0:
+				pos.y = gy
+				vel.y = -vel.y * 0.36
+				vel.x *= 0.62
+		p["pos"] = pos
+		p["vel"] = vel
 		p["life"] = float(p["life"]) - delta
 		if float(p["life"]) <= 0.0:
 			_particles.remove_at(i)
@@ -209,6 +476,7 @@ func _process(delta: float) -> void:
 		_shockwave_lens_rect.visible = false
 
 	_refresh_counts()
+	_update_multimeshes(delta)
 	queue_redraw()
 
 
@@ -216,6 +484,7 @@ func _refresh_counts() -> void:
 	if sim == null:
 		return
 	rendered_actor_count = sim.actors.size()
+	rendered_flora_count = sim.flora_instances.size()
 	var b_cnt: int = 0
 	for c_id in sim.cities_map.keys():
 		b_cnt += (sim.cities_map[c_id]["building_instances"] as Array).size()
@@ -288,11 +557,8 @@ func _on_planet_surface_changed() -> void:
 
 
 func _on_city_structures_changed() -> void:
-	if _skip_next_full_rebuild:
-		_skip_next_full_rebuild = false
-		_refresh_counts()
-		return
 	_refresh_counts()
+	_update_multimeshes(0.0)
 	queue_redraw()
 
 
@@ -314,14 +580,17 @@ func _on_rocket_launched(from_pos: Vector2, col: Color, _city_name: String) -> v
 func _on_god_impact_2d(map_pos: Vector2, radius_px: float, color: Color, _power_id: String) -> void:
 	for _i in range(28):
 		var ang: float = randf() * TAU
-		var spd: float = randf_range(25.0, maxf(60.0, radius_px * 1.2))
+		var spd: float = randf_range(28.0, maxf(65.0, radius_px * 1.25))
+		var offset := Vector2(cos(ang), sin(ang)) * randf_range(0.0, radius_px * 0.35)
 		_particles.append({
-			"pos": map_pos + Vector2(cos(ang), sin(ang)) * randf_range(0.0, radius_px * 0.35),
-			"vel": Vector2(cos(ang), sin(ang)) * spd,
+			"pos": map_pos + offset,
+			"vel": Vector2(cos(ang) * spd, sin(ang) * spd * 0.55 - randf_range(40.0, 95.0)),
+			"gravity": 260.0,
+			"ground_y": map_pos.y + offset.y + randf_range(4.0, 18.0),
 			"color": color.lightened(0.25),
 			"size": 5.0 if randf() < 0.5 else 4.0,
-			"life": randf_range(0.35, 0.85),
-			"max_life": 0.85
+			"life": randf_range(0.45, 0.95),
+			"max_life": 0.95
 		})
 
 
@@ -375,6 +644,8 @@ func request_dirty_rect_update(rect: Rect2i) -> void:
 		_map_texture = ImageTexture.create_from_image(_map_image)
 	else:
 		_map_texture.update(_map_image)
+	if _map_bg_rect != null:
+		_map_bg_rect.texture = _map_texture
 	queue_redraw()
 
 
@@ -395,93 +666,150 @@ func _rebuild_pixel_map_texture() -> void:
 		_map_texture = ImageTexture.create_from_image(_map_image)
 	else:
 		_map_texture.update(_map_image)
+	if _map_bg_rect != null:
+		_map_bg_rect.texture = _map_texture
 	queue_redraw()
 
 
 func _sample_and_shade_pixel(px: int, py: int, u: float, v: float, bayer2: Array) -> Color:
-	var sample: Dictionary = sim.sample_pixel_terrain(Vector2(u, v))
-	var elev: float = float(sample["elevation"])
-	var biome_id: String = sample["biome_id"]
-	var city_id: int = int(sample["city_id"])
+	var gw: int = sim.GRID_W
+	var gh: int = sim.GRID_H
+	var fx: float = clampf(u * float(gw), 0.0, float(gw) - 0.001)
+	var fy: float = clampf(v * float(gh), 0.0, float(gh) - 0.001)
+	var gx: int = int(fx)
+	var gy: int = int(fy)
+	var gx1: int = mini(gx + 1, gw - 1)
+	var gy1: int = mini(gy + 1, gh - 1)
+	var tx: float = fx - float(gx)
+	var ty: float = fy - float(gy)
+
+	var t00: Dictionary = sim.tiles[gy * gw + gx]
+	var e00: float = float(t00["elevation"])
+	var e10: float = float(sim.tiles[gy * gw + gx1]["elevation"])
+	var e01: float = float(sim.tiles[gy1 * gw + gx]["elevation"])
+	var e11: float = float(sim.tiles[gy1 * gw + gx1]["elevation"])
+	var base_e: float = lerpf(lerpf(e00, e10, tx), lerpf(e01, e11, tx), ty)
+
+	var coast_jitter: float = sim._noise_detail.get_noise_2d(u * 180.0, v * 110.0) * 0.055
+	var micro_jitter: float = sim._noise_detail.get_noise_2d(u * 420.0 + 70.0, v * 260.0) * 0.022
+	var elev: float = base_e + coast_jitter + micro_jitter
 	var dither: float = bayer2[(px % 2) + (py % 2) * 2] - 0.375
+	var tier: int = sim.classify_base_tile_tier(elev)
+
+	if tier == 0:
+		# Глубокий океан (WorldBox TileLibrary.deep_ocean #3370CC)
+		if elev + dither * 0.025 < -0.25 or ((px + py * 3) % 19) == 0:
+			return WB_ABYSS_OCEAN
+		return WB_DEEP_OCEAN
+	elif tier == 1:
+		# Прибрежный океан (WorldBox TileLibrary.close_ocean #4084E2)
+		if elev + dither * 0.025 < -0.165:
+			return WB_DEEP_OCEAN
+		return WB_CLOSE_OCEAN
+
+	var jx: int = clampi(int(fx + coast_jitter * 6.5), 0, gw - 1)
+	var jy: int = clampi(int(fy + micro_jitter * 12.0), 0, gh - 1)
+	var biome_id: String = sim.tiles[jy * gw + jx]["biome_id"]
+
+	var zx: int = clampi(px / sim.ZONE_SIZE, 0, sim.ZONE_W - 1)
+	var zy: int = clampi(py / sim.ZONE_SIZE, 0, sim.ZONE_H - 1)
+	var z_id: int = zy * sim.ZONE_W + zx
+	var city_id: int = int(t00["city_id"])
+	if z_id >= 0 and z_id < sim.zone_city_id.size() and sim.zone_city_id[z_id] != -1:
+		city_id = sim.zone_city_id[z_id]
+
+	# Северный сосед (py - 1) для 2.5D теней уступов и береговой пены в стиле WorldBox
+	var v_north: float = (float(maxi(0, py - 1)) + 0.5) / float(TEX_H)
+	var ty_n: float = maxf(0.0, ty - 0.148148)
+	var base_e_n: float = lerpf(lerpf(e00, e10, tx), lerpf(e01, e11, tx), ty_n)
+	var elev_n: float = base_e_n + sim._noise_detail.get_noise_2d(u * 180.0, v_north * 110.0) * 0.055 + micro_jitter
+	var tier_n: int = sim.classify_base_tile_tier(elev_n)
 
 	var col: Color
-	if elev < -0.18:
-		# Глубокий абиссальный океан (как на краях карты WorldBox)
-		col = Color(0.035, 0.095, 0.19)
-		if ((px + py * 3) % 17) == 0:
-			col = col.darkened(0.12)
-	elif elev < -0.055:
-		# Средний океан
-		col = Color(0.055, 0.19, 0.34)
-		if elev + dither * 0.03 < -0.15:
-			col = Color(0.035, 0.095, 0.19)
-	elif elev < 0.0:
-		# Мелководная бирюзовая лагуна и пенный прибой у берега
-		if elev > -0.013 and ((px + py) % 2 == 0):
-			col = Color(0.68, 0.94, 0.98) # Береговая пиксельная пена
+	if tier == 2:
+		# Мелководная лагуна (WorldBox TileLibrary.shallow_waters #55AEF0) и береговая пена
+		if (elev > -0.014 or tier_n >= 3) and ((px + py) % 2 == 0):
+			col = WB_SHORE_FOAM
 		else:
-			col = Color(0.11, 0.41, 0.54)
-	elif elev < 0.032:
-		# Пиксельный песчаный пляж или базальтовая кромка для экстремальных биомов
+			col = WB_SHALLOW_WATERS
+	elif tier == 3:
+		# Песчаный пляж (WorldBox TileLibrary.sand #F7E898 / мокрый песок #D8C08C)
 		if biome_id == "biome_plasma_inferno" or biome_id == "biome_cybercore" or biome_id == "biome_singularity_swamp":
-			col = Color(0.24, 0.23, 0.29)
+			col = Color(0.28, 0.27, 0.33) if (px + py) % 2 == 0 else Color(0.22, 0.21, 0.26)
 		elif biome_id == "biome_cryo_superconductor":
-			col = Color(0.68, 0.88, 0.98)
+			col = Color(0.75, 0.88, 0.96) if (px + py) % 2 == 0 else Color(0.65, 0.80, 0.90)
 		else:
-			col = Color(0.82, 0.73, 0.46) if (px + py) % 2 == 0 else Color(0.74, 0.64, 0.39)
+			var is_wet: bool = (elev < 0.015) or (tier_n <= 2) or ((px + py) % 3 == 0 and elev < 0.024)
+			col = WB_SAND_WET if is_wet else WB_SAND
+	elif tier == 4 or tier == 5:
+		# Основная суша: проверяем дороги (#C1997C) и фермерские поля (#A8663A) поверх почвы
+		var fine_idx: int = py * TEX_W + px
+		var road_val: int = sim.fine_road_overlay[fine_idx] if fine_idx < sim.fine_road_overlay.size() else 0
+		if road_val == 1:
+			col = WB_ROAD if ((px + py) % 3 != 0) else WB_ROAD_EDGE
+		elif road_val == 2:
+			col = WB_FIELD if (py % 2 == 0) else WB_FIELD_FURROW
+		else:
+			var b_asset: SandboxAssetScript.BiomeAsset = sim.assets.biomes.get(biome_id)
+			var low_c: Color = b_asset.base_color_low if b_asset != null else WB_SOIL_LOW
+			var high_c: Color = b_asset.base_color_high if b_asset != null else WB_SOIL_HIGH
+			var dec_c: Color = b_asset.decor_color if b_asset != null else low_c.lightened(0.12)
+			var em_c: Color = b_asset.emissive_color if b_asset != null else Color.BLACK
+			var em_str: float = b_asset.emissive_strength if b_asset != null else 0.0
+
+			# Чёткое разделение на _low и _high слой биома с пиксельным дизерингом на границе (WorldBox TopTileLibrary)
+			var use_high: bool = (elev + dither * 0.028) >= 0.135
+			col = high_c if use_high else low_c
+
+			# Микро-декор травинок и цветов биома
+			var hash_decor: int = ((px * 374761393) ^ (py * 668265263)) & 0x7fffffff
+			if (hash_decor % 19) == 0:
+				col = dec_c
+
+			if biome_id == "biome_cybercore":
+				if (px % 6 == 0 and py % 3 != 0) or (py % 6 == 0 and px % 4 != 0):
+					col = col.lerp(Color(0.41, 0.92, 0.87), 0.55)
+			elif biome_id == "biome_plasma_inferno":
+				if ((px * 5 + py * 7) % 11) < 2:
+					col = Color(1.0, 0.42, 0.03)
+			elif em_str > 0.2 and ((px * 13 + py * 7) % 23) == 0:
+				col = col.lerp(em_c, 0.55)
+	elif tier == 6:
+		# Скалистые предгорья (WorldBox TileLibrary.hills #5B5E5C)
+		col = WB_HILLS if ((px + py) % 2 == 0) else WB_HILLS_EDGE
+	elif tier == 7:
+		# Высокие горы (WorldBox TileLibrary.mountains #414545)
+		col = WB_MOUNTAINS if (py % 2 == 0) else WB_HILLS
 	else:
-		# Основная суша биома с пошаговой пиксельной высотой и дизерингом
-		var b_asset: SandboxAssetScript.BiomeAsset = sim.assets.biomes.get(biome_id)
-		var low_c: Color = b_asset.base_color_low if b_asset != null else Color(0.18, 0.22, 0.26)
-		var high_c: Color = b_asset.base_color_high if b_asset != null else Color(0.32, 0.38, 0.42)
-		var em_c: Color = b_asset.emissive_color if b_asset != null else Color.BLACK
-		var em_str: float = b_asset.emissive_strength if b_asset != null else 0.0
+		# Горные пики и ледники (WorldBox TileLibrary.summit #333333 + snow cap)
+		col = WB_SUMMIT_SNOW if ((px + py) % 2 == 0) else WB_SUMMIT
 
-		var h_norm: float = clampf((elev - 0.03) / 0.26 + dither * 0.16, 0.0, 1.0)
-		# Квантуем в 4 чёткие пиксельные ступени палитры
-		var h_step: float = floor(h_norm * 4.0) / 3.0
-		col = low_c.lerp(high_c, h_step)
+	# 2.5D микро-тень высоты под каждым уступом рельефа и светлая кромка (WorldBox Cliff Drop-Shadow)
+	if tier >= 2:
+		if tier_n > tier and tier_n >= 3:
+			col = col.darkened(0.26)
+		elif tier > tier_n and tier >= 3:
+			col = col.lightened(0.14)
 
-		# Пиксельный узор для специфических биомов (магистрали Кибер-Ядра, жилы лавы, кристаллы)
-		if biome_id == "biome_cybercore":
-			if (px % 6 == 0 and py % 3 != 0) or (py % 6 == 0 and px % 4 != 0):
-				col = col.lerp(Color(0.0, 0.95, 1.0), 0.55)
-		elif biome_id == "biome_plasma_inferno":
-			if ((px * 5 + py * 7) % 11) < 2:
-				col = Color(1.0, 0.58, 0.12)
-		elif em_str > 0.2 and ((px * 13 + py * 7) % 23) == 0:
-			col = col.lerp(em_c, 0.65)
+	# Чёткие квадратные зоны городов 8×8 тайлов с яркими внешними границами государств (WorldBox TileZone)
+	if city_id != -1 and sim.cities_map.has(city_id) and tier >= 2:
+		var c_col: Color = sim.cities_map[city_id]["color"]
+		col = col.lerp(c_col, 0.14)
 
-		# Высокие горные хребты и заснеженные/кристаллические пики
-		if elev > 0.27:
-			if elev > 0.34:
-				col = Color(0.88, 0.94, 1.0) if (px + py) % 2 == 0 else Color(0.72, 0.82, 0.92)
-			else:
-				col = Color(0.36, 0.39, 0.46) if py % 2 == 0 else Color(0.26, 0.28, 0.34)
+		var lx: int = px % sim.ZONE_SIZE
+		var ly: int = py % sim.ZONE_SIZE
+		var is_border := false
+		if lx == 0 and (zx == 0 or sim._get_zone_owner(zx - 1, zy) != city_id):
+			is_border = true
+		elif lx == sim.ZONE_SIZE - 1 and (zx == sim.ZONE_W - 1 or sim._get_zone_owner(zx + 1, zy) != city_id):
+			is_border = true
+		elif ly == 0 and (zy == 0 or sim._get_zone_owner(zx, zy - 1) != city_id):
+			is_border = true
+		elif ly == sim.ZONE_SIZE - 1 and (zy == sim.ZONE_H - 1 or sim._get_zone_owner(zx, zy + 1) != city_id):
+			is_border = true
 
-		# Политическая подсветка территории города и пунктирная пиксельная граница (как в WorldBox)
-		if city_id != -1 and sim.cities_map.has(city_id):
-			var c_col: Color = sim.cities_map[city_id]["color"]
-			col = col.lerp(c_col, 0.14)
-			# Проверяем границу клетки города
-			var gx_f: float = u * float(sim.GRID_W)
-			var gy_f: float = v * float(sim.GRID_H)
-			var cell_frac_x: float = gx_f - floor(gx_f)
-			var cell_frac_y: float = gy_f - floor(gy_f)
-			var gx_i: int = clampi(int(gx_f), 0, sim.GRID_W - 1)
-			var gy_i: int = clampi(int(gy_f), 0, sim.GRID_H - 1)
-			var is_border := false
-			if cell_frac_x < 0.09 and gx_i > 0 and int(sim.tiles[gy_i * sim.GRID_W + (gx_i - 1)]["city_id"]) != city_id:
-				is_border = true
-			elif cell_frac_x > 0.91 and gx_i < sim.GRID_W - 1 and int(sim.tiles[gy_i * sim.GRID_W + (gx_i + 1)]["city_id"]) != city_id:
-				is_border = true
-			elif cell_frac_y < 0.13 and gy_i > 0 and int(sim.tiles[(gy_i - 1) * sim.GRID_W + gx_i]["city_id"]) != city_id:
-				is_border = true
-			elif cell_frac_y > 0.87 and gy_i < sim.GRID_H - 1 and int(sim.tiles[(gy_i + 1) * sim.GRID_W + gx_i]["city_id"]) != city_id:
-				is_border = true
-			if is_border and ((px + py) % 2 == 0):
-				col = c_col.lightened(0.28)
+		if is_border:
+			col = c_col.lightened(0.32) if ((px + py) % 2 == 0) else c_col.darkened(0.15)
 
 	return col
 
@@ -492,6 +820,7 @@ func _sample_and_shade_pixel(px: int, py: int, u: float, v: float, bayer2: Array
 func _draw() -> void:
 	if sim == null:
 		return
+	_sync_multimesh_visibility()
 
 	match view_mode:
 		0:
@@ -503,8 +832,8 @@ func _draw() -> void:
 
 
 func _draw_mode_planet_worldbox() -> void:
-	# 1. Базовая попиксельная карта 384×216, растянутая на 1920×1080 без размытия (Nearest)
-	if _map_texture != null:
+	# 1. Базовая попиксельная карта 384×216 рисуется через _map_bg_rect (или напрямую, если нода ещё не создана)
+	if _map_bg_rect == null and _map_texture != null:
 		draw_texture_rect(_map_texture, Rect2(0.0, 0.0, 1920.0, 1080.0), false)
 
 	# 2. Анимированные пиксельные блики волн на воде
@@ -515,21 +844,10 @@ func _draw_mode_planet_worldbox() -> void:
 			var mp: Vector2 = t["map_pos"]
 			var wx: float = mp.x + float(((i * 17 + wave_shift) % 7) - 3) * 5.0
 			var wy: float = mp.y + float(((i * 11) % 5) - 2) * 5.0
-			draw_rect(Rect2(wx, wy, 10.0, 3.0), Color(0.35, 0.78, 0.95, 0.28), true)
+			draw_rect(Rect2(wx, wy, 10.0, 3.0), Color(0.72, 0.94, 1.0, 0.28), true)
 
-	# 3. Отрисовка пиксельной флоры и кристаллов на суше
-	for i in range(sim.TILE_COUNT):
-		var t: Dictionary = sim.tiles[i]
-		var fl: String = t["flora"]
-		if fl == "" or float(t["elevation"]) < 0.01:
-			continue
-		var tex: ImageTexture = _sprites.get("flora_" + fl)
-		if tex != null:
-			var p: Vector2 = t["map_pos"] + Vector2(-14.0, -8.0)
-			draw_rect(Rect2(p.x - 7.0, p.y + 6.0, 14.0, 4.0), Color(0.0, 0.0, 0.0, 0.35), true)
-			draw_texture_rect(tex, Rect2(p.x - 10.0, p.y - 12.0, 20.0, 20.0), false)
-
-	# 4. Отрисовка зданий городов (BuildOrder instances) и лучей орбитальных лифтов
+	# 3. Флора и минералы рендерятся батчем через _mm_flora (MultiMeshInstance2D + worldbox_multimesh.gdshader)
+	# 4. Отрисовка лучей орбитальных лифтов и гравитационных якорей поверх зданий (_mm_buildings)
 	for c_id in sim.cities_map.keys():
 		var city: Dictionary = sim.cities_map[c_id]
 		var c_col: Color = city["color"]
@@ -537,33 +855,30 @@ func _draw_mode_planet_worldbox() -> void:
 		for b_inst in inst_list:
 			var b_pos: Vector2 = b_inst["map_pos"]
 			var arch: String = b_inst["archetype"]
-			var tex: ImageTexture = _sprites.get("bld_" + arch, _sprites.get("bld_dome"))
-
-			# Если это орбитальный лифт или гравитационный якорь — рисуем пиксельный лазерный луч вверх в космос!
 			if arch == "elevator" or arch == "anchor":
 				draw_rect(Rect2(b_pos.x - 2.0, 92.0, 4.0, maxf(0.0, b_pos.y - 92.0)), Color(c_col.r, c_col.g, c_col.b, 0.32), true)
 				draw_rect(Rect2(b_pos.x - 1.0, 92.0, 2.0, maxf(0.0, b_pos.y - 92.0)), Color(0.85, 0.98, 1.0, 0.65), true)
 
-			# Тень под зданием + сам пиксель-арт спрайт здания
-			draw_rect(Rect2(b_pos.x - 12.0, b_pos.y + 8.0, 24.0, 6.0), Color(0.0, 0.0, 0.0, 0.45), true)
-			if tex != null:
-				var tint: Color = Color.WHITE.lerp(c_col.lightened(0.35), 0.35)
-				draw_texture_rect(tex, Rect2(b_pos.x - 13.0, b_pos.y - 16.0, 26.0, 26.0), false, tint)
-
-	# 5. Отрисовка живых пиксельных человечков (Actors) на континентах
-	var frame_idx: int = int(_anim_time * 5.0) % 2
+	# 5. Инструменты в руках, переносимые ресурсы (бревна, руда, урожай) и значки профессий над жителями (_mm_actors)
 	for a in sim.actors:
 		var a_pos: Vector2 = a["pos"]
-		var arch: String = a["archetype"]
-		var u_frame: int = (frame_idx + int(a["id"])) % 2
-		var tex: ImageTexture = _sprites.get("actor_%s_%d" % [arch, u_frame], _sprites.get("actor_carbon_0"))
-		var bob_y: float = -absf(sin(float(a["anim_phase"]))) * 2.5
+		var bob_y: float = -absf(sin(float(a["anim_phase"]))) * 2.4
+		var dir_x: float = -1.0 if bool(a.get("facing_left", false)) else 1.0
+		var j_state: String = str(a.get("job_state", ""))
+		var carried: String = str(a.get("carrying", ""))
 
-		# Пиксельная тень под ногами
-		draw_rect(Rect2(a_pos.x - 5.0, a_pos.y + 5.0, 10.0, 3.0), Color(0.0, 0.0, 0.0, 0.45), true)
-		if tex != null:
-			var w_sign: float = -16.0 if bool(a.get("facing_left", false)) else 16.0
-			draw_texture_rect(tex, Rect2(a_pos.x - w_sign * 0.5, a_pos.y - 10.0 + bob_y, w_sign, 16.0), false)
+		# Отображение ресурса в руках при доставке на склад полиса (CARRY_TO_STORAGE)
+		if carried == "wood":
+			draw_rect(Rect2(a_pos.x + dir_x * 4.0 - 3.0, a_pos.y - 5.0 + bob_y, 7.0, 4.0), Color(0.55, 0.34, 0.16), true)
+			draw_rect(Rect2(a_pos.x + dir_x * 4.0 - 2.0, a_pos.y - 4.0 + bob_y, 5.0, 2.0), Color(0.76, 0.52, 0.28), true)
+		elif carried == "minerals":
+			draw_rect(Rect2(a_pos.x + dir_x * 4.0 - 3.0, a_pos.y - 6.0 + bob_y, 6.0, 5.0), Color(0.25, 0.95, 0.88), true)
+		elif carried == "food":
+			draw_rect(Rect2(a_pos.x + dir_x * 4.0 - 3.0, a_pos.y - 5.0 + bob_y, 6.0, 4.0), Color(0.98, 0.84, 0.22), true)
+		elif j_state == "WORKING":
+			# Взмах топора / кирки / молотка при рубке дерева, добыче руды или постройке
+			var swing_y: float = sin(float(a.get("tool_swing", 0.0))) * 4.0
+			draw_rect(Rect2(a_pos.x + dir_x * 6.0 - 2.0, a_pos.y - 6.0 + bob_y + swing_y, 4.0, 5.0), Color(0.88, 0.92, 0.98), true)
 
 		# Маленький пиксельный значок профессии над учёными и астронавтами
 		var role: String = a.get("role", "")
@@ -1030,9 +1345,27 @@ func _make_sprite_from_grid(rows: Array[String], palette: Dictionary) -> ImageTe
 	return ImageTexture.create_from_image(img)
 
 
+func _pack_horizontal_atlas(sprite_keys: Array[String], cell_w: int, cell_h: int) -> ImageTexture:
+	var cols: int = maxi(1, sprite_keys.size())
+	var atlas_img := Image.create(cell_w * cols, cell_h, false, Image.FORMAT_RGBA8)
+	atlas_img.fill(Color(0, 0, 0, 0))
+	for i in range(cols):
+		var tex: ImageTexture = _sprites.get(sprite_keys[i])
+		if tex != null:
+			var src_img: Image = tex.get_image()
+			if src_img != null:
+				atlas_img.blit_rect(src_img, Rect2i(0, 0, mini(cell_w, src_img.get_width()), mini(cell_h, src_img.get_height())), Vector2i(i * cell_w, 0))
+	return ImageTexture.create_from_image(atlas_img)
+
+
 func _build_pixel_art_sprites() -> void:
 	_sprites.clear()
+	_flora_type_to_col.clear()
+	_building_arch_to_col.clear()
+	_actor_key_to_col.clear()
+
 	var k_out := Color(0.04, 0.06, 0.10, 1.0) # Чёрно-синий пиксельный контур
+	var k_shd := Color(0.0, 0.0, 0.0, 0.42)   # Мягкая пиксельная тень под ногами/основанием
 
 	# --- 1. ПИКСЕЛЬНЫЕ ЧЕЛОВЕЧКИ И СУЩЕСТВА (5 рас × 2 кадра анимации шага) ---
 	var actor_variants := [
@@ -1042,9 +1375,12 @@ func _build_pixel_art_sprites() -> void:
 		{"id": "cyber", "c1": Color(0.12, 0.92, 1.0), "c2": Color(1.0, 0.88, 0.25)},
 		{"id": "quantum", "c1": Color(0.65, 0.30, 1.0), "c2": Color(0.35, 1.0, 0.95)}
 	]
+	var actor_atlas_keys: Array[String] = []
 	for av in actor_variants:
-		var pal := {"#": k_out, "1": av["c1"], "2": av["c2"]}
-		_sprites["actor_%s_0" % av["id"]] = _make_sprite_from_grid([
+		var pal := {"#": k_out, "1": av["c1"], "2": av["c2"], "s": k_shd}
+		var k0: String = "actor_%s_0" % av["id"]
+		var k1: String = "actor_%s_1" % av["id"]
+		_sprites[k0] = _make_sprite_from_grid([
 			"...####...",
 			"..#1221#..",
 			"..#1221#..",
@@ -1054,9 +1390,9 @@ func _build_pixel_art_sprites() -> void:
 			".#111111#.",
 			"..#1##1#..",
 			"..#1..1#..",
-			"..##..##.."
+			".ss##..##s"
 		], pal)
-		_sprites["actor_%s_1" % av["id"]] = _make_sprite_from_grid([
+		_sprites[k1] = _make_sprite_from_grid([
 			"...####...",
 			"..#1221#..",
 			"..#1221#..",
@@ -1066,10 +1402,15 @@ func _build_pixel_art_sprites() -> void:
 			"..#1111#..",
 			".#1#..#1#.",
 			".##....##.",
-			".........."
+			".ssssssss."
 		], pal)
+		_actor_key_to_col["%s_0" % av["id"]] = actor_atlas_keys.size()
+		actor_atlas_keys.append(k0)
+		_actor_key_to_col["%s_1" % av["id"]] = actor_atlas_keys.size()
+		actor_atlas_keys.append(k1)
+	_atlas_actor_tex = _pack_horizontal_atlas(actor_atlas_keys, 10, 10)
 
-	# --- 2. ПИКСЕЛЬНАЯ ФЛОРА И РЕСУРСЫ БИОМОВ ---
+	# --- 2. ПИКСЕЛЬНАЯ ФЛОРА И РЕСУРСЫ БИОМОВ (10 типов) ---
 	_sprites["flora_bio_tree"] = _make_sprite_from_grid([
 		"...####...",
 		".##1221##.",
@@ -1080,8 +1421,34 @@ func _build_pixel_art_sprites() -> void:
 		"...#33#...",
 		"...#33#...",
 		"..##33##..",
-		".........."
-	], {"#": k_out, "1": Color(0.12, 0.75, 0.52), "2": Color(0.35, 1.0, 0.78), "3": Color(0.45, 0.32, 0.22)})
+		".ssssssss."
+	], {"#": k_out, "1": Color(0.22, 0.72, 0.30), "2": Color(0.55, 0.92, 0.38), "3": Color(0.48, 0.32, 0.20), "s": k_shd})
+
+	_sprites["flora_savanna_tree"] = _make_sprite_from_grid([
+		".########.",
+		"#12222221#",
+		"#11122111#",
+		".###33###.",
+		"....#3#...",
+		"...#33#...",
+		"...#3#....",
+		"...#33#...",
+		"..##33##..",
+		".ssssssss."
+	], {"#": k_out, "1": Color(0.52, 0.68, 0.22), "2": Color(0.78, 0.88, 0.32), "3": Color(0.46, 0.30, 0.18), "s": k_shd})
+
+	_sprites["flora_pine_tree"] = _make_sprite_from_grid([
+		"....##....",
+		"...#22#...",
+		"..#1221#..",
+		".#211112#.",
+		"..#1221#..",
+		".#211112#.",
+		"#11111111#",
+		"...#33#...",
+		"..##33##..",
+		".ssssssss."
+	], {"#": k_out, "1": Color(0.18, 0.52, 0.45), "2": Color(0.78, 0.94, 0.98), "3": Color(0.42, 0.28, 0.18), "s": k_shd})
 
 	_sprites["flora_cryo_crystal"] = _make_sprite_from_grid([
 		"....##....",
@@ -1092,9 +1459,9 @@ func _build_pixel_art_sprites() -> void:
 		".#122111#.",
 		"..#1111#..",
 		"..######..",
-		"..........",
+		".ssssssss.",
 		".........."
-	], {"#": k_out, "1": Color(0.28, 0.75, 0.98), "2": Color(0.82, 0.96, 1.0)})
+	], {"#": k_out, "1": Color(0.28, 0.75, 0.98), "2": Color(0.82, 0.96, 1.0), "s": k_shd})
 
 	_sprites["flora_actinide_ore"] = _make_sprite_from_grid([
 		"....##....",
@@ -1104,10 +1471,10 @@ func _build_pixel_art_sprites() -> void:
 		"#12211221#",
 		"#11122111#",
 		".########.",
-		"..........",
+		".ssssssss.",
 		"..........",
 		".........."
-	], {"#": k_out, "1": Color(0.32, 0.45, 0.22), "2": Color(0.58, 1.0, 0.18)})
+	], {"#": k_out, "1": Color(0.32, 0.45, 0.22), "2": Color(0.58, 1.0, 0.18), "s": k_shd})
 
 	_sprites["flora_piezo_spire"] = _make_sprite_from_grid([
 		"....##....",
@@ -1118,9 +1485,9 @@ func _build_pixel_art_sprites() -> void:
 		".#111111#.",
 		"..#1111#..",
 		"..######..",
-		"..........",
+		".ssssssss.",
 		".........."
-	], {"#": k_out, "1": Color(0.68, 0.25, 0.92), "2": Color(0.95, 0.65, 1.0)})
+	], {"#": k_out, "1": Color(0.68, 0.25, 0.92), "2": Color(0.95, 0.65, 1.0), "s": k_shd})
 
 	_sprites["flora_cyber_node"] = _make_sprite_from_grid([
 		"...####...",
@@ -1131,9 +1498,9 @@ func _build_pixel_art_sprites() -> void:
 		"#12211221#",
 		"#11111111#",
 		".########.",
-		"..........",
+		".ssssssss.",
 		".........."
-	], {"#": k_out, "1": Color(0.22, 0.38, 0.48), "2": Color(0.0, 0.95, 1.0)})
+	], {"#": k_out, "1": Color(0.22, 0.38, 0.48), "2": Color(0.0, 0.95, 1.0), "s": k_shd})
 
 	_sprites["flora_lava_vent"] = _make_sprite_from_grid([
 		"...####...",
@@ -1142,11 +1509,11 @@ func _build_pixel_art_sprites() -> void:
 		"#11122111#",
 		"#11111111#",
 		"##########",
-		"..........",
+		".ssssssss.",
 		"..........",
 		"..........",
 		".........."
-	], {"#": k_out, "1": Color(0.32, 0.16, 0.14), "2": Color(1.0, 0.55, 0.12)})
+	], {"#": k_out, "1": Color(0.32, 0.16, 0.14), "2": Color(1.0, 0.55, 0.12), "s": k_shd})
 
 	_sprites["flora_void_monolith"] = _make_sprite_from_grid([
 		"...####...",
@@ -1156,10 +1523,10 @@ func _build_pixel_art_sprites() -> void:
 		"..#1111#..",
 		"..#2112#..",
 		"...####...",
-		"..........",
+		"..ssssss..",
 		"..........",
 		".........."
-	], {"#": k_out, "1": Color(0.22, 0.08, 0.42), "2": Color(0.85, 0.35, 1.0)})
+	], {"#": k_out, "1": Color(0.22, 0.08, 0.42), "2": Color(0.85, 0.35, 1.0), "s": k_shd})
 
 	_sprites["flora_basalt_rock"] = _make_sprite_from_grid([
 		"..........",
@@ -1169,18 +1536,30 @@ func _build_pixel_art_sprites() -> void:
 		"#11122111#",
 		"#11111111#",
 		".########.",
-		"..........",
+		".ssssssss.",
 		"..........",
 		".........."
-	], {"#": k_out, "1": Color(0.34, 0.36, 0.42), "2": Color(0.52, 0.55, 0.62)})
+	], {"#": k_out, "1": Color(0.34, 0.36, 0.42), "2": Color(0.52, 0.55, 0.62), "s": k_shd})
 
-	# --- 3. ПИКСЕЛЬНЫЕ ЗДАНИЯ ГОРОДОВ (12×12 с яркими окнами и куполами) ---
+	var flora_types_order: Array[String] = [
+		"bio_tree", "savanna_tree", "pine_tree", "cryo_crystal", "actinide_ore",
+		"piezo_spire", "cyber_node", "lava_vent", "void_monolith", "basalt_rock"
+	]
+	var flora_atlas_keys: Array[String] = []
+	for i in range(flora_types_order.size()):
+		var ft: String = flora_types_order[i]
+		_flora_type_to_col[ft] = i
+		flora_atlas_keys.append("flora_" + ft)
+	_atlas_flora_tex = _pack_horizontal_atlas(flora_atlas_keys, 10, 10)
+
+	# --- 3. ПИКСЕЛЬНЫЕ ЗДАНИЯ ГОРОДОВ (12×12 с яркими окнами, куполами и тенью) ---
 	var b_pal := {
 		"#": k_out,
 		"1": Color(0.58, 0.68, 0.82),
 		"2": Color(0.88, 0.95, 1.0),
 		"3": Color(0.22, 0.95, 1.0),
-		"4": Color(1.0, 0.82, 0.25)
+		"4": Color(1.0, 0.82, 0.25),
+		"s": k_shd
 	}
 	_sprites["bld_dome"] = _make_sprite_from_grid([
 		"....####....",
@@ -1192,7 +1571,7 @@ func _build_pixel_art_sprites() -> void:
 		"#1144114411#",
 		"#1144114411#",
 		"############",
-		"............",
+		".ssssssssss.",
 		"............",
 		"............"
 	], b_pal)
@@ -1207,7 +1586,7 @@ func _build_pixel_art_sprites() -> void:
 		"#1411331141#",
 		"#1111111111#",
 		"############",
-		"....#11#....",
+		".sss#11#sss.",
 		".....##.....",
 		"............"
 	], b_pal)
@@ -1224,7 +1603,7 @@ func _build_pixel_art_sprites() -> void:
 		".#11122111#.",
 		"#1144114411#",
 		"############",
-		"............"
+		".ssssssssss."
 	], b_pal)
 
 	_sprites["bld_collider"] = _make_sprite_from_grid([
@@ -1238,7 +1617,7 @@ func _build_pixel_art_sprites() -> void:
 		"#1233333321#",
 		".#12222221#.",
 		"..########..",
-		"............",
+		".ssssssssss.",
 		"............"
 	], b_pal)
 
@@ -1253,7 +1632,7 @@ func _build_pixel_art_sprites() -> void:
 		".#11233211#.",
 		"#1144334411#",
 		"############",
-		"............",
+		".ssssssssss.",
 		"............"
 	], b_pal)
 
@@ -1267,7 +1646,7 @@ func _build_pixel_art_sprites() -> void:
 		"#1411111141#",
 		"#1114444111#",
 		"############",
-		"............",
+		".ssssssssss.",
 		"............",
 		"............"
 	], b_pal)
@@ -1282,7 +1661,7 @@ func _build_pixel_art_sprites() -> void:
 		"#1122332211#",
 		"#1111111111#",
 		"############",
-		"............",
+		".ssssssssss.",
 		"............",
 		"............"
 	], b_pal)
@@ -1298,9 +1677,20 @@ func _build_pixel_art_sprites() -> void:
 		".#44333344#.",
 		"..##4444##..",
 		"....####....",
-		"............",
+		"..ssssssss..",
 		"............"
 	], b_pal)
+
+	var bld_archs_order: Array[String] = [
+		"dome", "extractor", "spire", "collider",
+		"elevator", "shipyard", "anchor", "matrioshka"
+	]
+	var bld_atlas_keys: Array[String] = []
+	for i in range(bld_archs_order.size()):
+		var ba: String = bld_archs_order[i]
+		_building_arch_to_col[ba] = i
+		bld_atlas_keys.append("bld_" + ba)
+	_atlas_building_tex = _pack_horizontal_atlas(bld_atlas_keys, 12, 12)
 
 	# --- 4. КОСМИЧЕСКИЕ ОБЪЕКТЫ (Ракета, Парус Дайсона, Астероид) ---
 	_sprites["rocket_ship"] = _make_sprite_from_grid([
