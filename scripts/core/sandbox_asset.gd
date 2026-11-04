@@ -223,3 +223,38 @@ class CitizenJobAsset extends SandboxAsset:
 	var tool_sprite: String = "axe" # axe, pickaxe, hammer, hoe, spear, scanner
 
 
+class PersonalTraitAsset extends SandboxAsset:
+	## Личная черта конкретного существа (реверс-инженеринг ActorTraitLibrary из WorldBox v0.51.2).
+	var hp_bonus: int = 0
+	var damage_bonus: float = 0.0
+	var speed_mult: float = 1.0
+	var scale_mult: float = 1.0
+	var intelligence_bonus: float = 0.0
+	var is_immortal: bool = false
+	var ignites_fire: bool = false
+	var regen_per_sec: float = 0.0
+
+
+class EquipmentAsset extends SandboxAsset:
+	## Экипировка из кузницы полиса (оружие и броня из ItemLibrary / EquipmentAsset в WorldBox v0.51.2).
+	var slot: String = "weapon" # weapon, armor
+	var tier: int = 1
+	var mineral_cost: int = 4
+	var wood_cost: int = 2
+	var damage_bonus: float = 8.0
+	var defense_bonus: float = 0.0
+	var hp_bonus: int = 0
+
+
+class WorldAgeAsset extends SandboxAsset:
+	## Космическая Эпоха (реверс-инженеринг EraAsset / EraLibrary из WorldBox v0.51.2).
+	var ambient_tint: Color = Color(1.0, 1.0, 1.0, 1.0)
+	var temp_offset_c: float = 0.0
+	var solar_mult: float = 1.0
+	var science_mult: float = 1.0
+	var war_aggression_mult: float = 1.0
+	var freezes_shallow_water: bool = false
+	var sparks_wildfires: bool = false
+
+
+

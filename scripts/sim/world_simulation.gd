@@ -206,6 +206,10 @@ var codex_compute_mult: float = 1.0
 # 2D-сетка карты (1024 макро-тайла + типизированные буферы 384×216 WorldTile + чанки 16×16 и зоны 8×8)
 var tiles: Array[Dictionary] = []
 var fine_elevation: PackedFloat32Array = PackedFloat32Array()
+var fine_elevation_delta: PackedFloat32Array = PackedFloat32Array()
+var fine_fire_time: PackedFloat32Array = PackedFloat32Array()
+var has_fine_elevation_deltas: bool = false
+var active_fire_count: int = 0
 var fine_base_tile: PackedByteArray = PackedByteArray()
 var fine_biome_idx: PackedByteArray = PackedByteArray()
 var fine_top_variant: PackedByteArray = PackedByteArray()
@@ -214,6 +218,12 @@ var zone_city_id: PackedInt32Array = PackedInt32Array()
 var chunk_dirty: PackedByteArray = PackedByteArray()
 var flora_instances: Array[Dictionary] = []
 var total_citizen_tasks_completed: int = 0
+var total_zones_captured_in_war: int = 0
+var total_items_forged: int = 0
+var current_age_id: String = "age_of_hope"
+var age_timer: float = 0.0
+var map_template_id: String = "archipelago"
+var map_water_offset: float = 0.0
 var _biome_id_to_idx: Dictionary = {}
 
 var _noise_elev: FastNoiseLite
@@ -290,6 +300,12 @@ func setup_world(seed_val: int = 1337, preserve_codex: bool = false) -> void:
 	_last_colony_time = -999.0
 	total_dyson_sails = 0
 	total_citizen_tasks_completed = 0
+	total_zones_captured_in_war = 0
+	total_items_forged = 0
+	current_age_id = "age_of_hope"
+	age_timer = 0.0
+	has_fine_elevation_deltas = false
+	active_fire_count = 0
 	dyson_stage = 1
 	dyson_stage_progress = 0.0
 	dyson_ring_frame_segments = 0
@@ -325,6 +341,12 @@ func setup_world(seed_val: int = 1337, preserve_codex: bool = false) -> void:
 	dyson_swarm_changed.emit()
 	field_lenses_changed.emit()
 	telemetry_updated.emit()
+
+
+func generate_world_with_template(seed_val: int, template_id: String = "archipelago", water_offset: float = 0.0) -> void:
+	map_template_id = template_id if template_id != "" else "archipelago"
+	map_water_offset = clampf(water_offset, -0.25, 0.25)
+	setup_world(seed_val, false)
 
 
 func _init_star_for_cycle(cycle: int) -> void:
@@ -383,10 +405,18 @@ func _build_2d_worldbox_grid(seed_val: int) -> void:
 			var norm_cy: float = (uv.y - 0.49) / 0.36
 			var radial_d: float = sqrt(norm_cx * norm_cx * 0.85 + norm_cy * norm_cy)
 			var island_mask: float = clampf(1.18 - pow(radial_d, 2.0), 0.0, 1.0)
+			if map_template_id == "pangaea":
+				island_mask = clampf(1.32 - pow(radial_d * 0.82, 1.75), 0.0, 1.0)
+			elif map_template_id == "ring_atoll":
+				var ring_d: float = absf(radial_d - 0.62)
+				island_mask = clampf(1.08 - ring_d * 2.5, 0.0, 1.0)
+			elif map_template_id == "shattered_isles":
+				var sh_n: float = _noise_detail.get_noise_2d(float(gx) * 4.5, float(gy) * 4.5)
+				island_mask = clampf((1.15 - pow(radial_d, 1.9)) * (0.75 + sh_n * 0.55), 0.0, 1.0)
 
 			var n_e: float = _noise_elev.get_noise_2d(float(gx) * 2.5, float(gy) * 2.8)
 			var n_m: float = _noise_moisture.get_noise_2d(float(gx) * 2.5, float(gy) * 2.5)
-			var elev: float = clampf((n_e + 0.24) * 0.62 * island_mask - (1.0 - island_mask) * 0.34, -0.40, 0.48)
+			var elev: float = clampf((n_e + 0.24) * 0.62 * island_mask - (1.0 - island_mask) * 0.34 - map_water_offset, -0.40, 0.48)
 
 			# Температура зависит от широты (север/юг холоднее, экватор теплее)
 			var lat_factor: float = 1.0 - absf(uv.y - 0.5) * 1.85
@@ -448,6 +478,16 @@ func _init_worldbox_fine_buffers() -> void:
 	_biome_id_to_idx.clear()
 	for i in range(assets.biome_list.size()):
 		_biome_id_to_idx[assets.biome_list[i].id] = i
+
+	if fine_elevation_delta.size() != FINE_COUNT:
+		fine_elevation_delta.resize(FINE_COUNT)
+	fine_elevation_delta.fill(0.0)
+	has_fine_elevation_deltas = false
+
+	if fine_fire_time.size() != FINE_COUNT:
+		fine_fire_time.resize(FINE_COUNT)
+	fine_fire_time.fill(0.0)
+	active_fire_count = 0
 
 	if fine_road_overlay.size() != FINE_COUNT:
 		fine_road_overlay.resize(FINE_COUNT)
@@ -568,7 +608,12 @@ func sample_pixel_terrain(px_uv: Vector2) -> Dictionary:
 
 	var coast_jitter: float = _noise_detail.get_noise_2d(px_uv.x * 180.0, px_uv.y * 110.0) * 0.055
 	var micro_jitter: float = _noise_detail.get_noise_2d(px_uv.x * 420.0 + 70.0, px_uv.y * 260.0) * 0.022
-	var final_elev: float = base_e + coast_jitter + micro_jitter
+	var fine_d: float = 0.0
+	if has_fine_elevation_deltas and fine_elevation_delta.size() == FINE_COUNT:
+		var fpx: int = clampi(int(px_uv.x * float(FINE_W)), 0, FINE_W - 1)
+		var fpy: int = clampi(int(px_uv.y * float(FINE_H)), 0, FINE_H - 1)
+		fine_d = fine_elevation_delta[fpy * FINE_W + fpx]
+	var final_elev: float = clampf(base_e + coast_jitter + micro_jitter + fine_d, -0.42, 0.48)
 
 	# Сглаженный выбор биома с органической пиксельной границей
 	var jx: int = clampi(int(fx + coast_jitter * 6.5), 0, GRID_W - 1)
@@ -610,7 +655,12 @@ func sample_elevation_fast(u: float, v: float) -> float:
 
 	var coast_jitter: float = _noise_detail.get_noise_2d(u * 180.0, v * 110.0) * 0.055
 	var micro_jitter: float = _noise_detail.get_noise_2d(u * 420.0 + 70.0, v * 260.0) * 0.022
-	return base_e + coast_jitter + micro_jitter
+	var fine_d: float = 0.0
+	if has_fine_elevation_deltas and fine_elevation_delta.size() == FINE_COUNT:
+		var fpx: int = clampi(int(u * float(FINE_W)), 0, FINE_W - 1)
+		var fpy: int = clampi(int(v * float(FINE_H)), 0, FINE_H - 1)
+		fine_d = fine_elevation_delta[fpy * FINE_W + fpx]
+	return clampf(base_e + coast_jitter + micro_jitter + fine_d, -0.42, 0.48)
 
 
 func classify_base_tile_tier(elev: float) -> int:
@@ -855,6 +905,12 @@ func _seed_initial_cradle() -> void:
 	# И дикое племя кибер-дронов в центре
 	_spawn_subspecies_at_tile(idx_mid, "cyber")
 
+	# Заселяем островную экосистему дикой фауной (кристальные олени, кибер-волки, пустотные виверны)
+	if land_candidates.size() >= 4:
+		spawn_wild_fauna(tiles[land_candidates[1]]["map_pos"], "crystal_stag")
+		spawn_wild_fauna(tiles[land_candidates[2]]["map_pos"], "cyber_wolf")
+		spawn_wild_fauna(tiles[land_candidates[mini(4, land_candidates.size() - 1)]]["map_pos"], "crystal_stag")
+
 	_create_dyson_ring(24, Color(0.25, 0.85, 1.0))
 
 
@@ -1029,6 +1085,7 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"miner": "Бурит литосферу",
 		"astronaut": "Готовит пуск к Сфере Дайсона",
 		"warrior": "Охраняет рубежи полиса",
+		"general": "Ведёт легион полиса со знаменем",
 		"colonist": "Плывёт основывать дочерний полис"
 	}
 
@@ -1039,11 +1096,26 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"miner": "miner",
 		"astronaut": "builder",
 		"warrior": "attacker",
+		"general": "attacker",
 		"colonist": "builder"
 	}
 
+	var p_traits: Array[String] = []
+	var hp_bonus: int = 0
+	if assets != null and not assets.personal_trait_list.is_empty():
+		var tr0: SandboxAssetScript.PersonalTraitAsset = assets.personal_trait_list[_rng.randi_range(0, assets.personal_trait_list.size() - 1)]
+		p_traits.append(tr0.id)
+		hp_bonus += tr0.hp_bonus
+		if (role == "warrior" or role == "general") and not p_traits.has("trait_veteran") and _rng.randf() < 0.45:
+			p_traits.append("trait_veteran")
+			hp_bonus += 40
+
+	var clan_prefixes := ["Дом Аксиомы", "Клан Гелиоса", "Династия Кварца", "Орден Эфира", "Клан Зенит"]
+	var clan_name: String = clan_prefixes[(unit_id_seed_hash(sp_id, city_id)) % clan_prefixes.size()]
+
 	var unit_id: int = _next_meta_id
 	_next_meta_id += 1
+	var max_hp_val: int = 100 + hp_bonus + (45 if role == "general" else 0)
 	var actor := {
 		"id": unit_id,
 		"name": "%s #%d" % [str(sp.get("name", "Юнит")).split("-")[0], unit_id % 100],
@@ -1063,7 +1135,18 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"target_pos": start_pos,
 		"home_tile": tile_idx,
 		"age": _rng.randi_range(1, 45),
-		"hp": 100,
+		"hp": max_hp_val,
+		"max_hp": max_hp_val,
+		"personal_traits": p_traits,
+		"weapon_id": "eq_laser_blade" if role == "general" else "",
+		"armor_id": "eq_nano_vest" if role == "general" else "",
+		"kills": 0,
+		"level": 2 if role == "general" else 1,
+		"is_favorite": (role == "general"),
+		"clan_name": clan_name,
+		"hunger": 0.0,
+		"is_fauna": false,
+		"fauna_type": "",
 		"color": sp.get("color", Color.AQUA),
 		"anim_phase": _rng.randf() * TAU,
 		"wait_timer": _rng.randf_range(0.15, 0.8),
@@ -1071,6 +1154,74 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 	}
 	actors.append(actor)
 	return actor
+
+
+func unit_id_seed_hash(a: int, b: int) -> int:
+	return abs((a * 73856093) ^ (b * 19349663) ^ (_next_meta_id * 83492791))
+
+
+func spawn_wild_fauna(world_pos: Vector2, fauna_type: String = "") -> Dictionary:
+	if actors.size() >= MAX_ACTORS:
+		return {}
+	var t_idx: int = find_closest_tile_2d(world_pos)
+	var f_types := ["crystal_stag", "cyber_wolf", "void_wyrm"]
+	var chosen_f: String = fauna_type if fauna_type != "" else f_types[_rng.randi_range(0, f_types.size() - 1)]
+	var titles := {
+		"crystal_stag": "Кристальный Олень",
+		"cyber_wolf": "Кибер-Волк",
+		"void_wyrm": "Пустотная Виверна"
+	}
+	var colors := {
+		"crystal_stag": Color(0.45, 0.96, 0.72),
+		"cyber_wolf": Color(1.0, 0.55, 0.22),
+		"void_wyrm": Color(0.88, 0.32, 1.0)
+	}
+	var hp_by_type := {
+		"crystal_stag": 90,
+		"cyber_wolf": 135,
+		"void_wyrm": 220
+	}
+	var unit_id: int = _next_meta_id
+	_next_meta_id += 1
+	var max_hp_v: int = int(hp_by_type.get(chosen_f, 100))
+	var fauna := {
+		"id": unit_id,
+		"name": "%s #%d" % [titles.get(chosen_f, "Зверь"), unit_id % 100],
+		"subspecies_id": -1,
+		"city_id": -1,
+		"archetype": "fauna_" + chosen_f,
+		"role": "fauna",
+		"job_id": "hunter",
+		"job_state": "IDLE",
+		"job_timer": 0.0,
+		"target_flora_idx": -1,
+		"carrying": "",
+		"tool_swing": 0.0,
+		"hit_shake": 0.0,
+		"thought": "Бродит по диким угодьям архипелага",
+		"pos": world_pos.clamp(Vector2(24.0, 24.0), Vector2(MAP_PIXEL_W - 24.0, MAP_PIXEL_H - 24.0)),
+		"target_pos": world_pos,
+		"home_tile": t_idx,
+		"age": _rng.randi_range(1, 25),
+		"hp": max_hp_v,
+		"max_hp": max_hp_v,
+		"personal_traits": ["trait_regenerator"] if chosen_f == "void_wyrm" else [],
+		"weapon_id": "",
+		"armor_id": "",
+		"kills": 0,
+		"level": 2 if chosen_f == "void_wyrm" else 1,
+		"is_favorite": false,
+		"clan_name": "Дикая Фауна",
+		"hunger": 0.0,
+		"is_fauna": true,
+		"fauna_type": chosen_f,
+		"color": colors.get(chosen_f, Color.GREEN),
+		"anim_phase": _rng.randf() * TAU,
+		"wait_timer": 0.1,
+		"facing_left": _rng.randf() < 0.5
+	}
+	actors.append(fauna)
+	return fauna
 
 
 func _step_actors(dt: float) -> void:
@@ -1227,9 +1378,37 @@ func _step_actors(dt: float) -> void:
 
 func _assign_next_citizen_job_target(a: Dictionary, city: Dictionary) -> void:
 	var j_id: String = str(a.get("job_id", "woodcutter"))
+	var role: String = str(a.get("role", ""))
+	var c_id: int = int(city["id"])
 	var c_pos: Vector2 = city["map_pos"]
 	a["carrying"] = ""
 	a["target_flora_idx"] = -1
+
+	# Если полис ведёт войну, Генерал ведёт легион к вражескому рубежу, а воины строятся вокруг Генерала (Army / General из WorldBox)
+	if role == "general" or role == "warrior":
+		var enemy_id: int = _get_city_war_enemy(c_id)
+		if enemy_id != -1 and cities_map.has(enemy_id):
+			var enemy_city: Dictionary = cities_map[enemy_id]
+			var enemy_claimed: Array = enemy_city.get("claimed_tiles", [])
+			var border_pos: Vector2 = enemy_city["map_pos"]
+			if not enemy_claimed.is_empty():
+				var bt_idx: int = int(enemy_claimed[_rng.randi_range(0, enemy_claimed.size() - 1)])
+				border_pos = tiles[bt_idx]["map_pos"]
+			if role == "general":
+				a["target_pos"] = border_pos + Vector2(_rng.randf_range(-16.0, 16.0), _rng.randf_range(-12.0, 12.0))
+				a["home_tile"] = find_closest_tile_2d(a["target_pos"])
+				a["job_state"] = "MOVE_TO_TARGET"
+				a["thought"] = "Ведёт легион на штурм «%s»!" % enemy_city["name"]
+				return
+			else:
+				var gen_pos: Vector2 = _get_city_general_pos(c_id, border_pos)
+				a["target_pos"] = (gen_pos + Vector2(_rng.randf_range(-22.0, 22.0), _rng.randf_range(-16.0, 16.0))).clamp(
+					Vector2(24.0, 24.0), Vector2(MAP_PIXEL_W - 24.0, MAP_PIXEL_H - 24.0)
+				)
+				a["home_tile"] = find_closest_tile_2d(a["target_pos"])
+				a["job_state"] = "MOVE_TO_TARGET"
+				a["thought"] = "В строю легиона атакует «%s»" % enemy_city["name"]
+				return
 
 	if (j_id == "woodcutter" or j_id == "miner") and not flora_instances.is_empty():
 		var want_mineral: bool = (j_id == "miner")
@@ -1270,6 +1449,25 @@ func _assign_next_citizen_job_target(a: Dictionary, city: Dictionary) -> void:
 		a["thought"] = "Работает на благо полиса"
 
 
+func _get_city_war_enemy(city_id: int) -> int:
+	for rel in diplomacy_relations.values():
+		if rel.get("status") == "WAR":
+			var ca: int = int(rel.get("city_a", -1))
+			var cb: int = int(rel.get("city_b", -1))
+			if ca == city_id and cities_map.has(cb):
+				return cb
+			elif cb == city_id and cities_map.has(ca):
+				return ca
+	return -1
+
+
+func _get_city_general_pos(city_id: int, fallback_pos: Vector2) -> Vector2:
+	for a in actors:
+		if int(a.get("city_id", -1)) == city_id and str(a.get("role", "")) == "general":
+			return a["pos"]
+	return fallback_pos
+
+
 func find_closest_actor(world_pos: Vector2, max_dist: float = 42.0) -> Dictionary:
 	var best_actor: Dictionary = {}
 	var best_d: float = max_dist
@@ -1279,6 +1477,189 @@ func find_closest_actor(world_pos: Vector2, max_dist: float = 42.0) -> Dictionar
 			best_d = d
 			best_actor = a
 	return best_actor
+
+
+# ==============================================================================
+# ПОПИКСЕЛЬНЫЙ ТЕРРАФОРМИНГ 384×216, КЛЕТОЧНЫЕ ПОЖАРЫ И КОСМИЧЕСКИЕ ЭПОХИ
+# ==============================================================================
+func apply_fine_terraforming_brush(world_pos: Vector2, radius_px: float, height_delta: float, flatten_to_sand: bool = false) -> int:
+	if fine_elevation_delta.size() != FINE_COUNT:
+		fine_elevation_delta.resize(FINE_COUNT)
+	has_fine_elevation_deltas = true
+
+	var cx: int = clampi(int(world_pos.x / MAP_PIXEL_W * float(FINE_W)), 0, FINE_W - 1)
+	var cy: int = clampi(int(world_pos.y / MAP_PIXEL_H * float(FINE_H)), 0, FINE_H - 1)
+	var rad_fine: int = clampi(int(ceil(radius_px / 5.0)), 1, 64)
+	var modified_count: int = 0
+
+	var y0: int = maxi(0, cy - rad_fine)
+	var y1: int = mini(FINE_H - 1, cy + rad_fine)
+	var x0: int = maxi(0, cx - rad_fine)
+	var x1: int = mini(FINE_W - 1, cx + rad_fine)
+
+	for fy in range(y0, y1 + 1):
+		for fx in range(x0, x1 + 1):
+			var dist_f: float = sqrt(float((fx - cx) * (fx - cx) + (fy - cy) * (fy - cy)))
+			if dist_f <= float(rad_fine):
+				var falloff: float = clampf(1.0 - (dist_f / float(rad_fine + 1)) * 0.45, 0.25, 1.0)
+				var f_idx: int = fy * FINE_W + fx
+				if flatten_to_sand:
+					var u: float = (float(fx) + 0.5) / float(FINE_W)
+					var v: float = (float(fy) + 0.5) / float(FINE_H)
+					var cur_without_delta: float = sample_elevation_fast(u, v) - fine_elevation_delta[f_idx]
+					fine_elevation_delta[f_idx] = 0.018 - cur_without_delta
+				else:
+					fine_elevation_delta[f_idx] = clampf(fine_elevation_delta[f_idx] + height_delta * falloff, -0.45, 0.45)
+				modified_count += 1
+
+	# Синхронизируем макро-тайлы под центром кисти для навигации кораблей/жителей
+	var best_t: int = find_closest_tile_2d(world_pos)
+	if flatten_to_sand:
+		tiles[best_t]["elevation"] = 0.018
+	else:
+		tiles[best_t]["elevation"] = clampf(float(tiles[best_t]["elevation"]) + height_delta * 0.5, -0.38, 0.46)
+
+	request_dirty_circle_update(world_pos, radius_px + 15.0)
+	planet_surface_changed.emit()
+	return modified_count
+
+
+func ignite_fine_fire(world_pos: Vector2, radius_px: float, duration: float = 9.0) -> int:
+	if fine_fire_time.size() != FINE_COUNT:
+		fine_fire_time.resize(FINE_COUNT)
+	var cx: int = clampi(int(world_pos.x / MAP_PIXEL_W * float(FINE_W)), 0, FINE_W - 1)
+	var cy: int = clampi(int(world_pos.y / MAP_PIXEL_H * float(FINE_H)), 0, FINE_H - 1)
+	var rad_fine: int = clampi(int(ceil(radius_px / 5.0)), 1, 48)
+	var ignited: int = 0
+
+	for fy in range(maxi(1, cy - rad_fine), mini(FINE_H - 2, cy + rad_fine) + 1):
+		for fx in range(maxi(1, cx - rad_fine), mini(FINE_W - 2, cx + rad_fine) + 1):
+			var dist_f: float = sqrt(float((fx - cx) * (fx - cx) + (fy - cy) * (fy - cy)))
+			if dist_f <= float(rad_fine):
+				var u: float = (float(fx) + 0.5) / float(FINE_W)
+				var v: float = (float(fy) + 0.5) / float(FINE_H)
+				if sample_elevation_fast(u, v) >= 0.0:
+					var f_idx: int = fy * FINE_W + fx
+					if fine_fire_time[f_idx] <= 0.0:
+						active_fire_count += 1
+					fine_fire_time[f_idx] = maxf(fine_fire_time[f_idx], duration * _rng.randf_range(0.65, 1.15))
+					ignited += 1
+
+	request_dirty_circle_update(world_pos, radius_px + 12.0)
+	planet_surface_changed.emit()
+	return ignited
+
+
+func extinguish_fine_fire(world_pos: Vector2, radius_px: float) -> int:
+	if fine_fire_time.size() != FINE_COUNT:
+		return 0
+	var cx: int = clampi(int(world_pos.x / MAP_PIXEL_W * float(FINE_W)), 0, FINE_W - 1)
+	var cy: int = clampi(int(world_pos.y / MAP_PIXEL_H * float(FINE_H)), 0, FINE_H - 1)
+	var rad_fine: int = clampi(int(ceil(radius_px / 5.0)) + 2, 2, 64)
+	var extinguished: int = 0
+
+	for fy in range(maxi(0, cy - rad_fine), mini(FINE_H - 1, cy + rad_fine) + 1):
+		for fx in range(maxi(0, cx - rad_fine), mini(FINE_W - 1, cx + rad_fine) + 1):
+			var f_idx: int = fy * FINE_W + fx
+			if fine_fire_time[f_idx] > 0.0:
+				fine_fire_time[f_idx] = 0.0
+				active_fire_count = maxi(0, active_fire_count - 1)
+				extinguished += 1
+
+	request_dirty_circle_update(world_pos, radius_px + 15.0)
+	planet_surface_changed.emit()
+	return extinguished
+
+
+func count_burning_fine_tiles() -> int:
+	if fine_fire_time.size() != FINE_COUNT:
+		return 0
+	var cnt: int = 0
+	for i in range(FINE_COUNT):
+		if fine_fire_time[i] > 0.0:
+			cnt += 1
+	active_fire_count = cnt
+	return cnt
+
+
+func _step_cellular_fire(dt: float) -> void:
+	if active_fire_count <= 0 or fine_fire_time.size() != FINE_COUNT:
+		return
+	var still_burning: int = 0
+	var min_x: int = FINE_W
+	var min_y: int = FINE_H
+	var max_x: int = 0
+	var max_y: int = 0
+	var newly_ignited: Array[int] = []
+
+	for fy in range(1, FINE_H - 1):
+		var row_off: int = fy * FINE_W
+		for fx in range(1, FINE_W - 1):
+			var f_idx: int = row_off + fx
+			var rem: float = fine_fire_time[f_idx]
+			if rem > 0.0:
+				rem -= dt
+				if rem <= 0.0:
+					fine_fire_time[f_idx] = 0.0
+				else:
+					fine_fire_time[f_idx] = rem
+					still_burning += 1
+					if _rng.randf() < 0.16 * dt and newly_ignited.size() < 24:
+						var nfx: int = fx + _rng.randi_range(-1, 1)
+						var nfy: int = fy + _rng.randi_range(-1, 1)
+						var n_idx: int = nfy * FINE_W + nfx
+						if fine_fire_time[n_idx] <= 0.0:
+							var nu: float = (float(nfx) + 0.5) / float(FINE_W)
+							var nv: float = (float(nfy) + 0.5) / float(FINE_H)
+							if sample_elevation_fast(nu, nv) >= 0.02:
+								newly_ignited.append(n_idx)
+				min_x = mini(min_x, fx)
+				min_y = mini(min_y, fy)
+				max_x = maxi(max_x, fx)
+				max_y = maxi(max_y, fy)
+
+	for n_idx in newly_ignited:
+		fine_fire_time[n_idx] = 4.5
+		still_burning += 1
+
+	active_fire_count = still_burning
+	if min_x <= max_x and min_y <= max_y:
+		request_dirty_rect_update(Rect2i(maxi(0, min_x - 2), maxi(0, min_y - 2), mini(FINE_W, max_x - min_x + 5), mini(FINE_H, max_y - min_y + 5)))
+
+
+func set_world_age(age_id: String) -> bool:
+	if assets == null or not assets.world_ages.has(age_id):
+		return false
+	if current_age_id == age_id:
+		return true
+	current_age_id = age_id
+	age_timer = 0.0
+	var wa: SandboxAssetScript.WorldAgeAsset = assets.world_ages[age_id]
+	_log_event("СМЕНА КОСМИЧЕСКОЙ ЭПОХИ: Наступила «%s» — %s" % [wa.title, wa.description], "cosmos", wa.ambient_tint)
+	request_dirty_rect_update(Rect2i(0, 0, FINE_W, FINE_H))
+	planet_surface_changed.emit()
+	telemetry_updated.emit()
+	return true
+
+
+func get_current_world_age_asset() -> SandboxAssetScript.WorldAgeAsset:
+	if assets == null:
+		return null
+	return assets.world_ages.get(current_age_id)
+
+
+func _tick_world_ages(dt: float) -> void:
+	age_timer += dt
+	if age_timer >= 65.0 and assets != null and not assets.world_age_list.is_empty():
+		age_timer = 0.0
+		var cur_wa := get_current_world_age_asset()
+		var next_idx: int = ((cur_wa.index_id if cur_wa != null else 0) + 1) % assets.world_age_list.size()
+		set_world_age(assets.world_age_list[next_idx].id)
+
+	var wa := get_current_world_age_asset()
+	if wa != null and wa.sparks_wildfires and _rng.randf() < 0.08 * dt and not flora_instances.is_empty():
+		var rf: Dictionary = flora_instances[_rng.randi_range(0, flora_instances.size() - 1)]
+		ignite_fine_fire(rf["pos"], 14.0, 5.0)
 
 
 # ==============================================================================
@@ -1319,6 +1700,10 @@ func _recalc_tile_lens_modifiers() -> void:
 
 func _tick_thermodynamics_and_lenses(_dt: float) -> void:
 	_recalc_tile_lens_modifiers()
+	_step_cellular_fire(_dt)
+	_tick_world_ages(_dt)
+	var wa := get_current_world_age_asset()
+	var age_temp_off: float = wa.temp_offset_c if wa != null else 0.0
 	var surface_dirty := false
 	var dirty_tiles: Array[int] = []
 
@@ -1328,7 +1713,7 @@ func _tick_thermodynamics_and_lenses(_dt: float) -> void:
 		var b_id: String = t["biome_id"]
 		var b_asset: SandboxAssetScript.BiomeAsset = assets.biomes.get(b_id)
 		if b_asset != null:
-			t["temperature_c"] = lerpf(float(t["temperature_c"]), b_asset.ideal_temp_c * star_luminosity_mult, 0.08)
+			t["temperature_c"] = lerpf(float(t["temperature_c"]), b_asset.ideal_temp_c * star_luminosity_mult + age_temp_off, 0.08)
 			t["radiation"] = lerpf(float(t["radiation"]), b_asset.radiation_level, 0.06)
 
 		# Клеточная физика из WorldBox (WorldBehaviourActionLava):
@@ -1588,6 +1973,8 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		"kingdom_id": city_id,
 		"parent_city_id": -1,
 		"internal_cohesion": 0.90,
+		"forged_items_count": 0,
+		"general_actor_id": -1,
 		"council": {
 			"leader_name": "%s-%d" % [sp["name"], city_id],
 			"title": "Архитектор Поля",
@@ -1602,12 +1989,15 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		if other_id != city_id:
 			_ensure_diplomacy_relation(city_id, other_id)
 
-	# Привязываем существующих юнитов этого вида к городу и спавним новых горожан
+	# Привязываем существующих юнитов этого вида к городу и спавним новых горожан (включая Генерала армии)
 	for a in actors:
 		if int(a["subspecies_id"]) == sp_id and int(a["city_id"]) == -1:
 			a["city_id"] = city_id
 	for _u in range(6):
-		_spawn_actor_unit(sp_id, tile_idx, city_id)
+		var role_override: String = "general" if _u == 0 else ""
+		var spawned := _spawn_actor_unit(sp_id, tile_idx, city_id, role_override)
+		if _u == 0 and not spawned.is_empty():
+			city_rec["general_actor_id"] = int(spawned["id"])
 
 	_log_event(
 		"Разум пробудился! Вид «%s» основал научный полис «%s» (планировка: %s)." % [sp["name"], c_name, chosen_layout],
@@ -1699,6 +2089,8 @@ func _tick_city_build_orders(dt: float) -> void:
 			var spawn_t: int = int(claimed_arr[_rng.randi_range(0, claimed_arr.size() - 1)])
 			_spawn_actor_unit(int(city["subspecies_id"]), spawn_t, int(city["id"]))
 
+		_tick_city_forge_and_army(city)
+
 		var b_dict: Dictionary = city["buildings"]
 		var city_m: float = 1.5
 		var city_e: float = 2.0
@@ -1761,6 +2153,104 @@ func _tick_city_build_orders(dt: float) -> void:
 	if structures_changed:
 		city_structures_changed.emit()
 	telemetry_updated.emit()
+
+
+func _tick_city_forge_and_army(city: Dictionary) -> void:
+	var cid: int = int(city["id"])
+	var has_general := false
+	var candidate_idx: int = -1
+	for i in range(actors.size()):
+		var a: Dictionary = actors[i]
+		if int(a.get("city_id", -1)) == cid:
+			if str(a.get("role", "")) == "general":
+				has_general = true
+				city["general_actor_id"] = int(a["id"])
+				break
+			elif str(a.get("role", "")) == "warrior" or candidate_idx == -1:
+				candidate_idx = i
+	if not has_general:
+		if candidate_idx != -1:
+			actors[candidate_idx]["role"] = "general"
+			actors[candidate_idx]["thought"] = "Поднимает знамя легиона"
+			city["general_actor_id"] = int(actors[candidate_idx]["id"])
+		elif actors.size() < MAX_ACTORS:
+			var gen_a := _spawn_actor_unit(int(city["subspecies_id"]), int(city["center_tile"]), cid, "general")
+			if not gen_a.is_empty():
+				city["general_actor_id"] = int(gen_a["id"])
+
+	var st: Dictionary = city.get("storage", {})
+	if int(st.get("minerals", 0)) >= 2 and int(st.get("wood", 0)) >= 1:
+		forge_city_equipment_for_actor(cid, -1)
+
+
+func forge_city_equipment_for_actor(city_id: int, actor_id: int = -1) -> String:
+	if not cities_map.has(city_id):
+		return ""
+	var city: Dictionary = cities_map[city_id]
+	var st: Dictionary = city.get("storage", {})
+	if int(st.get("minerals", 0)) < 2 or int(st.get("wood", 0)) < 1:
+		return ""
+
+	var target_actor: Dictionary = {}
+	if actor_id != -1:
+		for a in actors:
+			if int(a["id"]) == actor_id:
+				target_actor = a
+				break
+	else:
+		# Приоритет: генерал -> воин -> лидер -> любой гражданин без полного снаряжения
+		var best_score: int = -1
+		for a in actors:
+			if int(a.get("city_id", -1)) != city_id:
+				continue
+			var missing_w: bool = str(a.get("weapon_id", "")) == ""
+			var missing_a: bool = str(a.get("armor_id", "")) == ""
+			if not missing_w and not missing_a:
+				continue
+			var r_str: String = str(a.get("role", ""))
+			var sc: int = 1
+			if r_str == "general":
+				sc = 10
+			elif r_str == "warrior":
+				sc = 8
+			elif r_str == "leader":
+				sc = 6
+			if sc > best_score:
+				best_score = sc
+				target_actor = a
+
+	if target_actor.is_empty():
+		return ""
+
+	var max_tier: int = clampi(int(city.get("science_tier", 1)), 1, 3)
+	var cur_w: String = str(target_actor.get("weapon_id", ""))
+	var cur_a: String = str(target_actor.get("armor_id", ""))
+	var desired_slot: String = "weapon"
+	if cur_w == "":
+		desired_slot = "weapon"
+	elif cur_a == "":
+		desired_slot = "armor"
+	else:
+		desired_slot = "weapon" if (int(city.get("forged_items_count", 0)) % 2 == 0) else "armor"
+	var chosen_eq: SandboxAssetScript.EquipmentAsset = null
+	for eq in assets.equipment_list:
+		if eq.slot == desired_slot and eq.tier <= max_tier:
+			if chosen_eq == null or eq.tier >= chosen_eq.tier:
+				chosen_eq = eq
+	if chosen_eq == null and not assets.equipment_list.is_empty():
+		chosen_eq = assets.equipment_list[0]
+	if chosen_eq == null:
+		return ""
+
+	st["minerals"] = maxi(0, int(st.get("minerals", 0)) - 2)
+	st["wood"] = maxi(0, int(st.get("wood", 0)) - 1)
+	if chosen_eq.slot == "weapon":
+		target_actor["weapon_id"] = chosen_eq.id
+	else:
+		target_actor["armor_id"] = chosen_eq.id
+	city["forged_items_count"] = int(city.get("forged_items_count", 0)) + 1
+	total_items_forged += 1
+	return chosen_eq.id
 
 
 func _select_next_build_order(city: Dictionary) -> SandboxAssetScript.BuildOrderAsset:
@@ -1879,6 +2369,8 @@ func _layout_offset_2d_pixels(layout: String, idx: int) -> Vector2:
 # 5. НАУЧНЫЕ ЗАМЫСЛЫ (PLOTS) И ГЕНЕРАТОР БЕСКОНЕЧНОЙ НАУКИ
 # ==============================================================================
 func _tick_plots_and_infinite_science(dt: float) -> void:
+	var age_asset := get_current_world_age_asset()
+	var age_sci_mult: float = age_asset.science_mult if age_asset != null else 1.0
 	for city_id in cities_map.keys():
 		var city: Dictionary = cities_map[city_id]
 		var center_tile: Dictionary = tiles[int(city["center_tile"])]
@@ -1892,13 +2384,13 @@ func _tick_plots_and_infinite_science(dt: float) -> void:
 			var plot: Dictionary = active_plots[plot_id]
 			var p_asset: SandboxAssetScript.PlotAsset = assets.plots.get(plot["asset_id"])
 			if p_asset != null:
-				var sci_speed: float = (1.5 + float(city["kardashev_level"]) * 3.0) * time_mult * dt * get_world_constant("light_speed")
+				var sci_speed: float = (1.5 + float(city["kardashev_level"]) * 3.0) * time_mult * dt * get_world_constant("light_speed") * age_sci_mult
 				plot["progress"] = float(plot["progress"]) + sci_speed
 				if float(plot["progress"]) >= float(plot["progress_needed"]):
 					_complete_plot(city, cult, plot, p_asset)
 
 		if active_world_laws.get("law_infinite_combinatorial_science", true) and not cult.is_empty():
-			var pts: float = float(cult.get("science_points", 0.0)) + (0.8 + float(city["science_tier"]) * 0.9) * minf(time_mult, 10.0) * dt * get_world_constant("light_speed")
+			var pts: float = float(cult.get("science_points", 0.0)) + (0.8 + float(city["science_tier"]) * 0.9) * minf(time_mult, 10.0) * dt * get_world_constant("light_speed") * age_sci_mult
 			var threshold: float = 85.0 + float(codex_theories.size()) * 40.0
 			if pts >= threshold:
 				cult["science_points"] = 0.0
@@ -2599,6 +3091,77 @@ func _apply_god_power_at_tile_internal(best_tile: int, power_id: String, brush_r
 			elif power_id == "power_chrono_supernova":
 				trigger_chrono_supernova_loop()
 
+		"terraforming_fine":
+			var is_vortex: bool = (power_id == "power_vortex_sand")
+			var modified_px: int = apply_fine_terraforming_brush(center_pos, rad_px, gp.height_delta, is_vortex)
+			result["modified_fine_pixels"] = modified_px
+			for idx in affected_tiles:
+				tiles[idx]["elevation"] = clampf(float(tiles[idx]["elevation"]) + gp.height_delta * 0.45, -0.38, 0.46)
+				tiles[idx]["flora"] = _pick_flora_for_biome(tiles[idx]["biome_id"], float(tiles[idx]["elevation"]), idx)
+			shockwave_triggered.emit(center_pos, rad_px, gp.beam_color)
+			_log_event("Точечный Терраформинг «%s»: изменено %d микро-тайлов рельефа." % [gp.title, modified_px], "terraforming", gp.beam_color)
+
+		"elemental_rain":
+			var put_out: int = extinguish_fine_fire(center_pos, rad_px * 1.35)
+			result["extinguished_fires"] = put_out
+			for idx in affected_tiles:
+				tiles[idx]["temperature_c"] = clampf(float(tiles[idx]["temperature_c"]) + gp.temp_delta_c, -240.0, 1200.0)
+				if float(tiles[idx]["elevation"]) >= 0.04 and tiles[idx]["flora"] == "":
+					tiles[idx]["flora"] = _pick_flora_for_biome(tiles[idx]["biome_id"], float(tiles[idx]["elevation"]), idx)
+			_damage_actors_in_radius(center_pos, rad_px * 1.2, -50.0, "living_rain")
+			request_dirty_circle_update(center_pos, rad_px * 1.35)
+			planet_surface_changed.emit()
+			shockwave_triggered.emit(center_pos, rad_px, gp.beam_color)
+			_log_event("Живой Ливень оросил землю и потушил %d очагов пламени!" % put_out, "nature", gp.beam_color)
+
+		"elemental_fire":
+			var ignited: int = ignite_fine_fire(center_pos, rad_px * 0.85, 9.0)
+			result["ignited_fires"] = ignited
+			for idx in affected_tiles:
+				tiles[idx]["temperature_c"] = clampf(float(tiles[idx]["temperature_c"]) + gp.temp_delta_c, -240.0, 1200.0)
+			_damage_actors_in_radius(center_pos, rad_px * 0.65, gp.actor_damage, "fire_spark")
+			shockwave_triggered.emit(center_pos, rad_px * 0.85, gp.beam_color)
+			_log_event("Пиро-Вспышка зажгла %d клеточных очагов пожара!" % ignited, "fire", gp.beam_color)
+
+		"spawn_fauna":
+			var f_types := ["crystal_stag", "cyber_wolf", "void_wyrm"]
+			var spawned_cnt: int = 0
+			for k_f in range(3):
+				var f_sp: String = f_types[(best_tile + k_f) % f_types.size()]
+				var offset_f := Vector2(float(k_f - 1) * 14.0, float((k_f % 2) * 10 - 5))
+				var fa := spawn_wild_fauna(center_pos + offset_f, f_sp)
+				if not fa.is_empty():
+					spawned_cnt += 1
+			result["spawned_fauna"] = spawned_cnt
+			shockwave_triggered.emit(center_pos, rad_px * 0.7, gp.beam_color)
+			_log_event("Призыв Фауны: в мир выпущено %d диких существ экосистемы." % spawned_cnt, "nature", gp.beam_color)
+
+		"bless_units":
+			var blessed_cnt: int = 0
+			for a in actors:
+				if (a["pos"] as Vector2).distance_to(center_pos) <= rad_px * 1.4:
+					var ptrs: Array = a.get("personal_traits", [])
+					if not ptrs.has("trait_blessed"):
+						ptrs.append("trait_blessed")
+					a["personal_traits"] = ptrs
+					a["max_hp"] = maxi(int(a.get("max_hp", 100)), 180)
+					a["hp"] = int(a["max_hp"])
+					if str(a.get("weapon_id", "")) == "" and int(a.get("city_id", -1)) != -1:
+						a["weapon_id"] = "eq_laser_blade"
+					blessed_cnt += 1
+			if blessed_cnt == 0 and not actors.is_empty():
+				var a0: Dictionary = actors[0]
+				var ptrs0: Array = a0.get("personal_traits", [])
+				if not ptrs0.has("trait_blessed"):
+					ptrs0.append("trait_blessed")
+				a0["personal_traits"] = ptrs0
+				a0["max_hp"] = maxi(int(a0.get("max_hp", 100)), 180)
+				a0["hp"] = int(a0["max_hp"])
+				blessed_cnt = 1
+			result["blessed_count"] = blessed_cnt
+			shockwave_triggered.emit(center_pos, rad_px, gp.beam_color)
+			_log_event("Печать Избранного благословила %d существ (+Здоровье, +Урон)!" % blessed_cnt, "bless", gp.beam_color)
+
 	god_impact_triggered.emit(center_dir, rad_norm, gp.beam_color, power_id)
 	god_impact_2d_triggered.emit(center_pos, rad_px, gp.beam_color, power_id)
 	telemetry_updated.emit()
@@ -2987,7 +3550,9 @@ func _tick_city_diplomacy(dt: float) -> void:
 				if float(rel["war_exhaustion_a"]) <= 0.0 and float(rel["war_exhaustion_b"]) <= 0.0:
 					set_diplomacy_status(id_a, id_b, "NEUTRAL")
 			elif st == "NEUTRAL":
-				var avg_op: float = (float(rel["opinion_a_to_b"]) + float(rel["opinion_b_to_a"])) * 0.5
+				var age_asset_dip := get_current_world_age_asset()
+				var war_bias: float = (1.0 - age_asset_dip.war_aggression_mult) * 20.0 if age_asset_dip != null else 0.0
+				var avg_op: float = (float(rel["opinion_a_to_b"]) + float(rel["opinion_b_to_a"])) * 0.5 + war_bias
 				if avg_op <= -30.0:
 					_try_start_diplomatic_plot(c_a, c_b, "plot_war_mobilization")
 				elif avg_op >= 20.0:
@@ -3059,6 +3624,98 @@ func _resolve_diplomatic_plot(initiator: Dictionary, plot: Dictionary) -> void:
 			set_diplomacy_status(int(initiator["id"]), target_id, "PEACE")
 
 
+func get_actor_combat_damage(a: Dictionary) -> int:
+	var r_str: String = str(a.get("role", ""))
+	var base_dmg: float = 16.0
+	if r_str == "general":
+		base_dmg = 28.0
+	elif r_str == "warrior":
+		base_dmg = 23.0
+	var w_id: String = str(a.get("weapon_id", ""))
+	if w_id != "" and assets.equipments.has(w_id):
+		var eq_w: SandboxAssetScript.EquipmentAsset = assets.equipments[w_id]
+		base_dmg += eq_w.damage_bonus
+	for tr_id in a.get("personal_traits", []):
+		if assets.personal_traits.has(tr_id):
+			var pt: SandboxAssetScript.PersonalTraitAsset = assets.personal_traits[tr_id]
+			base_dmg += pt.damage_bonus
+	base_dmg += float(int(a.get("level", 1)) - 1) * 2.5
+	return maxi(4, int(round(base_dmg)))
+
+
+func get_actor_armor_defense(a: Dictionary) -> int:
+	var def_val: float = 0.0
+	var ar_id: String = str(a.get("armor_id", ""))
+	if ar_id != "" and assets.equipments.has(ar_id):
+		var eq_a: SandboxAssetScript.EquipmentAsset = assets.equipments[ar_id]
+		def_val += eq_a.defense_bonus
+	return maxi(0, int(round(def_val)))
+
+
+func capture_enemy_zone_at_pos(attacker_city_id: int, defender_city_id: int, world_pos: Vector2) -> bool:
+	if not cities_map.has(attacker_city_id) or not cities_map.has(defender_city_id):
+		return false
+	var attacker: Dictionary = cities_map[attacker_city_id]
+	var defender: Dictionary = cities_map[defender_city_id]
+	var def_zones: Array = defender.get("claimed_zones", [])
+	var att_zones: Array = attacker.get("claimed_zones", [])
+	var zx_p: int = clampi(int(world_pos.x / MAP_PIXEL_W * float(ZONE_W)), 0, ZONE_W - 1)
+	var zy_p: int = clampi(int(world_pos.y / MAP_PIXEL_H * float(ZONE_H)), 0, ZONE_H - 1)
+	var z_id: int = zy_p * ZONE_W + zx_p
+	if z_id < 0 or z_id >= ZONE_COUNT or zone_city_id[z_id] != defender_city_id:
+		# Находим ближайшую пограничную зону защитника
+		var best_z: int = -1
+		var best_d: float = 999999.0
+		for dz in def_zones:
+			var dz_i: int = int(dz)
+			if dz_i >= 0 and dz_i < ZONE_COUNT and zone_city_id[dz_i] == defender_city_id:
+				var zx: int = dz_i % ZONE_W
+				var zy: int = int(dz_i / ZONE_W)
+				var z_pos := Vector2(
+					(float(zx) + 0.5) / float(ZONE_W) * MAP_PIXEL_W,
+					(float(zy) + 0.5) / float(ZONE_H) * MAP_PIXEL_H
+				)
+				var d: float = z_pos.distance_to(world_pos)
+				if d < best_d:
+					best_d = d
+					best_z = dz_i
+		z_id = best_z
+
+	if z_id < 0 or z_id >= ZONE_COUNT:
+		return false
+
+	zone_city_id[z_id] = attacker_city_id
+	def_zones.erase(z_id)
+	if not att_zones.has(z_id):
+		att_zones.append(z_id)
+	defender["claimed_zones"] = def_zones
+	attacker["claimed_zones"] = att_zones
+	total_zones_captured_in_war += 1
+
+	# Если в точке захвата есть окраинный макро-тайл защитника (не столица), перекрашиваем границу
+	var t_idx: int = find_closest_tile_2d(world_pos)
+	var def_tiles: Array = defender.get("claimed_tiles", [])
+	var att_tiles: Array = attacker.get("claimed_tiles", [])
+	if def_tiles.size() > 1 and t_idx != int(defender["center_tile"]) and int(tiles[t_idx]["city_id"]) == defender_city_id:
+		tiles[t_idx]["city_id"] = attacker_city_id
+		tiles[t_idx]["subspecies_id"] = int(attacker["subspecies_id"])
+		def_tiles.erase(t_idx)
+		if not att_tiles.has(t_idx):
+			att_tiles.append(t_idx)
+		request_dirty_tiles_update([t_idx])
+	else:
+		var zx: int = z_id % ZONE_W
+		var zy: int = int(z_id / ZONE_W)
+		var z_pos := Vector2(
+			(float(zx) + 0.5) / float(ZONE_W) * MAP_PIXEL_W,
+			(float(zy) + 0.5) / float(ZONE_H) * MAP_PIXEL_H
+		)
+		request_dirty_circle_update(z_pos, 42.0)
+
+	planet_surface_changed.emit()
+	return true
+
+
 func _step_actor_combat(dt: float) -> void:
 	if diplomacy_relations.is_empty() or actors.size() < 2:
 		return
@@ -3094,13 +3751,24 @@ func _step_actor_combat(dt: float) -> void:
 
 			var pos_a: Vector2 = a["pos"]
 			var pos_b: Vector2 = b["pos"]
-			if pos_a.distance_to(pos_b) <= 22.0:
-				var dmg: int = _rng.randi_range(20, 35)
+			if pos_a.distance_to(pos_b) <= 24.0:
+				var raw_dmg: int = get_actor_combat_damage(a) + _rng.randi_range(-2, 4)
+				var def_b: int = get_actor_armor_defense(b)
+				var dmg: int = maxi(5, raw_dmg - def_b)
 				var hp_b: int = maxi(0, int(b.get("hp", 100)) - dmg)
 				b["hp"] = hp_b
+				if (a.get("personal_traits", []) as Array).has("trait_pyromaniac"):
+					ignite_fine_fire(pos_b, 12.0, 4.0)
 				var killed: bool = (hp_b <= 0)
 				actor_damaged_or_killed.emit(int(b["id"]), int(a["id"]), "combat" if not killed else "killed_in_combat")
 				if killed:
+					a["kills"] = int(a.get("kills", 0)) + 1
+					a["level"] = mini(10, 1 + int(int(a["kills"]) / 2))
+					var ptrs_a: Array = a.get("personal_traits", [])
+					if int(a["kills"]) >= 2 and not ptrs_a.has("trait_veteran"):
+						ptrs_a.append("trait_veteran")
+						a["personal_traits"] = ptrs_a
+					capture_enemy_zone_at_pos(c_a, c_b, pos_b)
 					actors.remove_at(idx_b)
 				var victim_k := "war_exhaustion_a" if int(rel["city_a"]) == c_b else "war_exhaustion_b"
 				rel[victim_k] = float(rel.get(victim_k, 0.0)) + 1.2
@@ -3115,12 +3783,14 @@ func _step_actor_combat(dt: float) -> void:
 		if tile_owner != -1 and tile_owner != c_id and cities_map.has(tile_owner):
 			var rel := get_diplomacy_relation(c_id, tile_owner)
 			if rel.get("status") == "WAR":
-				var raid_chance: float = 0.35 * dt if str(a.get("role", "")) == "warrior" else 0.12 * dt
+				var role_s: String = str(a.get("role", ""))
+				var raid_chance: float = 0.45 * dt if (role_s == "general" or role_s == "warrior") else 0.12 * dt
 				if _rng.randf() < raid_chance:
 					building_damaged_or_destroyed.emit(tile_owner, "order_bio_dome", false)
+					capture_enemy_zone_at_pos(c_id, tile_owner, a["pos"])
 					var raid_k := "war_exhaustion_a" if int(rel["city_a"]) == tile_owner else "war_exhaustion_b"
 					rel[raid_k] = float(rel.get(raid_k, 0.0)) + 0.8
-					_log_event("Рейд! Воины «%s» совершили набег на пограничный купол «%s»!" % [cities_map[c_id]["name"], cities_map[tile_owner]["name"]], "war", Color(1.0, 0.4, 0.4))
+					_log_event("Штурм границы! Легион «%s» захватил приграничную зону у «%s»!" % [cities_map[c_id]["name"], cities_map[tile_owner]["name"]], "war", Color(1.0, 0.4, 0.4))
 
 
 # ==============================================================================
@@ -3235,6 +3905,8 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 		"kingdom_id": int(mother.get("kingdom_id", mother_city_id)),
 		"parent_city_id": mother_city_id,
 		"internal_cohesion": 0.95,
+		"forged_items_count": 0,
+		"general_actor_id": -1,
 		"council": {
 			"leader_name": "Командор-%s" % c_name,
 			"title": "Губернатор Дальней Колонии",
@@ -3246,7 +3918,10 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 	cities_map[new_city_id] = city_rec
 
 	for _u in range(5):
-		_spawn_actor_unit(sp_id, tile_idx, new_city_id)
+		var role_ov: String = "general" if _u == 0 else ""
+		var sp_a := _spawn_actor_unit(sp_id, tile_idx, new_city_id, role_ov)
+		if _u == 0 and not sp_a.is_empty():
+			city_rec["general_actor_id"] = int(sp_a["id"])
 
 	for other_id in cities_map.keys():
 		if other_id != new_city_id:
@@ -3262,8 +3937,17 @@ func _found_daughter_city(mother_city_id: int, tile_idx: int, sp_id: int, cult_i
 
 
 # ==============================================================================
-# 9. ИНСПЕКЦИЯ ДАННЫХ И ГЛОБАЛЬНЫЕ МЕТРИКИ (PROJECT.md Interface Contracts)
+# 9. ИНСПЕКЦИЯ ДАННЫХ, ИЗБРАННЫЕ ЮНИТЫ И СОХРАНЕНИЕ/ЗАГРУЗКА МИРА
 # ==============================================================================
+func toggle_actor_favorite(actor_id: int) -> bool:
+	for a in actors:
+		if int(a["id"]) == actor_id:
+			var new_fav: bool = not bool(a.get("is_favorite", false))
+			a["is_favorite"] = new_fav
+			return new_fav
+	return false
+
+
 func get_detailed_city_data(city_id: int) -> Dictionary:
 	if not cities_map.has(city_id):
 		return {}
@@ -3305,6 +3989,10 @@ func get_detailed_city_data(city_id: int) -> Dictionary:
 		"center_tile": c["center_tile"],
 		"map_pos": c["map_pos"],
 		"claimed_tiles_count": (c["claimed_tiles"] as Array).size(),
+		"claimed_zones_count": (c.get("claimed_zones", []) as Array).size(),
+		"storage": c.get("storage", {"wood": 0, "minerals": 0, "food": 0}),
+		"forged_items_count": int(c.get("forged_items_count", 0)),
+		"general_actor_id": int(c.get("general_actor_id", -1)),
 		"buildings_count": (c["building_instances"] as Array).size(),
 		"buildings": c["buildings"],
 		"active_plot": active_plots.get(p_id, {}),
@@ -3325,6 +4013,7 @@ func get_detailed_actor_data(actor_id: int) -> Dictionary:
 				"role": a["role"],
 				"thought": a["thought"],
 				"hp": a["hp"],
+				"max_hp": int(a.get("max_hp", 100)),
 				"age": a["age"],
 				"pos": a["pos"],
 				"target_pos": a["target_pos"],
@@ -3332,8 +4021,17 @@ func get_detailed_actor_data(actor_id: int) -> Dictionary:
 				"city_id": c_id,
 				"city_name": cities_map[c_id]["name"] if cities_map.has(c_id) else "Дикий",
 				"subspecies_id": sp_id,
-				"subspecies_name": subspecies_map[sp_id]["name"] if subspecies_map.has(sp_id) else "",
-				"color": a["color"]
+				"subspecies_name": subspecies_map[sp_id]["name"] if subspecies_map.has(sp_id) else str(a.get("fauna_species", "Дикая Фауна")),
+				"color": a["color"],
+				"personal_traits": a.get("personal_traits", []),
+				"weapon_id": str(a.get("weapon_id", "")),
+				"armor_id": str(a.get("armor_id", "")),
+				"kills": int(a.get("kills", 0)),
+				"level": int(a.get("level", 1)),
+				"is_favorite": bool(a.get("is_favorite", false)),
+				"clan_name": str(a.get("clan_name", "")),
+				"combat_damage": get_actor_combat_damage(a),
+				"armor_defense": get_actor_armor_defense(a)
 			}
 	return {}
 
@@ -3357,6 +4055,8 @@ func get_global_world_metrics() -> Dictionary:
 	return {
 		"world_year": world_year,
 		"chrono_cycle": chrono_cycle,
+		"current_age_id": current_age_id,
+		"map_template_id": map_template_id,
 		"total_cities": cities_map.size(),
 		"total_population": total_pop,
 		"total_actors": actors.size(),
@@ -3375,5 +4075,166 @@ func get_global_world_metrics() -> Dictionary:
 		"dyson_eclipse_ratio": get_dyson_eclipse_ratio(),
 		"active_wars_count": wars,
 		"active_trade_routes_count": trades,
-		"active_alliances_count": alliances
+		"active_alliances_count": alliances,
+		"active_fire_count": active_fire_count,
+		"total_items_forged": total_items_forged,
+		"total_zones_captured_in_war": total_zones_captured_in_war
 	}
+
+
+func save_world_to_dict() -> Dictionary:
+	return {
+		"version": 2,
+		"world_seed": world_seed,
+		"world_year": world_year,
+		"chrono_cycle": chrono_cycle,
+		"current_age_id": current_age_id,
+		"age_timer": age_timer,
+		"map_template_id": map_template_id,
+		"map_water_offset": map_water_offset,
+		"matter_stock": matter_stock,
+		"energy_gw": energy_gw,
+		"compute_pflops": compute_pflops,
+		"codex_energy_mult": codex_energy_mult,
+		"codex_compute_mult": codex_compute_mult,
+		"codex_matter_mult": codex_matter_mult,
+		"dyson_stage": dyson_stage,
+		"dyson_stage_progress": dyson_stage_progress,
+		"dyson_ring_frame_segments": dyson_ring_frame_segments,
+		"dyson_shell_active_segments": dyson_shell_active_segments,
+		"dyson_matrioshka_layers": dyson_matrioshka_layers,
+		"total_dyson_sails": total_dyson_sails,
+		"dyson_rings": dyson_rings.duplicate(true),
+		"tiles": tiles.duplicate(true),
+		"fine_elevation_delta": fine_elevation_delta.duplicate(),
+		"has_fine_elevation_deltas": has_fine_elevation_deltas,
+		"fine_fire_time": fine_fire_time.duplicate(),
+		"active_fire_count": active_fire_count,
+		"zone_city_id": zone_city_id.duplicate(),
+		"subspecies_map": subspecies_map.duplicate(true),
+		"cultures_map": cultures_map.duplicate(true),
+		"cities_map": cities_map.duplicate(true),
+		"actors": actors.duplicate(true),
+		"diplomacy_relations": diplomacy_relations.duplicate(true),
+		"active_plots": active_plots.duplicate(true),
+		"codex_theories": codex_theories.duplicate(true),
+		"active_world_laws": active_world_laws.duplicate(true),
+		"world_constants": world_constants.duplicate(true),
+		"field_lenses": field_lenses.duplicate(true),
+		"total_items_forged": total_items_forged,
+		"total_zones_captured_in_war": total_zones_captured_in_war,
+		"next_meta_id": _next_meta_id
+	}
+
+
+func load_world_from_dict(state: Dictionary) -> bool:
+	if state.is_empty() or not state.has("tiles") or not state.has("cities_map"):
+		return false
+	world_seed = int(state.get("world_seed", world_seed))
+	world_year = float(state.get("world_year", 1.0))
+	chrono_cycle = int(state.get("chrono_cycle", 1))
+	current_age_id = str(state.get("current_age_id", "age_of_hope"))
+	age_timer = float(state.get("age_timer", 0.0))
+	map_template_id = str(state.get("map_template_id", "archipelago"))
+	map_water_offset = float(state.get("map_water_offset", 0.0))
+	matter_stock = float(state.get("matter_stock", 180.0))
+	energy_gw = float(state.get("energy_gw", 240.0))
+	compute_pflops = float(state.get("compute_pflops", 80.0))
+	codex_energy_mult = float(state.get("codex_energy_mult", 1.0))
+	codex_compute_mult = float(state.get("codex_compute_mult", 1.0))
+	codex_matter_mult = float(state.get("codex_matter_mult", 1.0))
+	dyson_stage = int(state.get("dyson_stage", 1))
+	dyson_stage_progress = float(state.get("dyson_stage_progress", 0.0))
+	dyson_ring_frame_segments = int(state.get("dyson_ring_frame_segments", 0))
+	dyson_shell_active_segments = int(state.get("dyson_shell_active_segments", 0))
+	dyson_matrioshka_layers = int(state.get("dyson_matrioshka_layers", 0))
+	total_dyson_sails = int(state.get("total_dyson_sails", 0))
+
+	dyson_rings.clear()
+	for r in state.get("dyson_rings", []):
+		dyson_rings.append((r as Dictionary).duplicate(true))
+
+	tiles.clear()
+	for t in state.get("tiles", []):
+		tiles.append((t as Dictionary).duplicate(true))
+
+	if state.has("fine_elevation_delta") and state["fine_elevation_delta"] is PackedFloat32Array:
+		fine_elevation_delta = (state["fine_elevation_delta"] as PackedFloat32Array).duplicate()
+	else:
+		fine_elevation_delta.resize(FINE_COUNT)
+		fine_elevation_delta.fill(0.0)
+	has_fine_elevation_deltas = bool(state.get("has_fine_elevation_deltas", false))
+
+	if state.has("fine_fire_time") and state["fine_fire_time"] is PackedFloat32Array:
+		fine_fire_time = (state["fine_fire_time"] as PackedFloat32Array).duplicate()
+	else:
+		fine_fire_time.resize(FINE_COUNT)
+		fine_fire_time.fill(0.0)
+	active_fire_count = int(state.get("active_fire_count", 0))
+
+	if state.has("zone_city_id") and state["zone_city_id"] is PackedInt32Array:
+		zone_city_id = (state["zone_city_id"] as PackedInt32Array).duplicate()
+
+	subspecies_map = (state.get("subspecies_map", {}) as Dictionary).duplicate(true)
+	cultures_map = (state.get("cultures_map", {}) as Dictionary).duplicate(true)
+	cities_map = (state.get("cities_map", {}) as Dictionary).duplicate(true)
+	diplomacy_relations = (state.get("diplomacy_relations", {}) as Dictionary).duplicate(true)
+	active_plots = (state.get("active_plots", {}) as Dictionary).duplicate(true)
+	active_world_laws = (state.get("active_world_laws", active_world_laws) as Dictionary).duplicate(true)
+	world_constants = (state.get("world_constants", world_constants) as Dictionary).duplicate(true)
+
+	actors.clear()
+	for a in state.get("actors", []):
+		actors.append((a as Dictionary).duplicate(true))
+
+	codex_theories.clear()
+	for th in state.get("codex_theories", []):
+		codex_theories.append((th as Dictionary).duplicate(true))
+
+	field_lenses.clear()
+	for fl in state.get("field_lenses", []):
+		field_lenses.append((fl as Dictionary).duplicate(true))
+
+	total_items_forged = int(state.get("total_items_forged", 0))
+	total_zones_captured_in_war = int(state.get("total_zones_captured_in_war", 0))
+	_next_meta_id = int(state.get("next_meta_id", _next_meta_id))
+
+	request_dirty_rect_update(Rect2i(0, 0, FINE_W, FINE_H))
+	planet_surface_changed.emit()
+	city_structures_changed.emit()
+	dyson_swarm_changed.emit()
+	telemetry_updated.emit()
+	return true
+
+
+func save_world_to_slot(slot_id: int) -> bool:
+	var dir := DirAccess.open("user://")
+	if dir != null and not dir.dir_exists("saves"):
+		dir.make_dir("saves")
+	var path := "user://saves/slot_%d.save" % clampi(slot_id, 1, 9)
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return false
+	var state := save_world_to_dict()
+	f.store_var(state, false)
+	f.close()
+	_log_event("Мир сохранён в слот #%d (Год %d, Полисов: %d)." % [slot_id, int(world_year), cities_map.size()], "save", Color(0.4, 1.0, 0.7))
+	return true
+
+
+func load_world_from_slot(slot_id: int) -> bool:
+	var path := "user://saves/slot_%d.save" % clampi(slot_id, 1, 9)
+	if not FileAccess.file_exists(path):
+		return false
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return false
+	var state = f.get_var(false)
+	f.close()
+	if not (state is Dictionary):
+		return false
+	var ok := load_world_from_dict(state)
+	if ok:
+		_log_event("Мир загружен из слота #%d (Год %d, Эпоха: %s)." % [slot_id, int(world_year), current_age_id], "load", Color(0.4, 0.9, 1.0))
+	return ok
+

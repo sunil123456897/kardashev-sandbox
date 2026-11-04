@@ -37,6 +37,8 @@ func _init() -> void:
 
 	sim.apply_god_power_at_pos(south_pos, "power_solar_plasma", 0.20)
 	sim.apply_god_power_at_pos(south_pos, "power_lens_singularity", 0.20)
+	sim.apply_god_power_at_pos(center_pos, "power_bless_unit", 0.22)
+	sim.apply_god_power_at_pos(east_pos, "power_spawn_fauna", 0.18)
 
 	# Добавим несколько колец Сферы Дайсона
 	sim.apply_god_power_at_pos(center_pos, "power_dyson_ring")
@@ -99,6 +101,14 @@ func _init() -> void:
 	var img4: Image = root.get_texture().get_image()
 	img4.save_png("E:/Godot_Проекты/1/screenshots/shot_4_science_codex.png")
 	print("Saved shot_4_science_codex.png")
+
+	# Скриншот 5: Модальное окно "🌍 Мир" (Космические Эпохи, Шаблоны Карты, Слои и Сохранения)
+	hud.toggle_world_modal()
+	for _f in range(6):
+		await process_frame
+	var img5: Image = root.get_texture().get_image()
+	img5.save_png("E:/Godot_Проекты/1/screenshots/shot_5_world_modal.png")
+	print("Saved shot_5_world_modal.png")
 
 	main_node.free()
 	quit(0)

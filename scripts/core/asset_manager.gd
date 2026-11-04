@@ -65,6 +65,18 @@ var base_tile_list: Array[SandboxAssetScript.BaseTileAsset] = []
 var citizen_jobs: Dictionary = {}             # id -> SandboxAssetScript.CitizenJobAsset (CitizenJobLibrary + ActorJobLibrary из WorldBox v0.51.2)
 var citizen_job_list: Array[SandboxAssetScript.CitizenJobAsset] = []
 
+var worldbox_powers: Dictionary = {}          # id -> SandboxAssetScript.GodPowerAsset (Терраформинг, Пожары, Ливень, Фауна, Благословение)
+var worldbox_power_list: Array[SandboxAssetScript.GodPowerAsset] = []
+
+var personal_traits: Dictionary = {}          # id -> SandboxAssetScript.PersonalTraitAsset (ActorTraitLibrary)
+var personal_trait_list: Array[SandboxAssetScript.PersonalTraitAsset] = []
+
+var equipments: Dictionary = {}               # id -> SandboxAssetScript.EquipmentAsset (ItemLibrary / Кузница)
+var equipment_list: Array[SandboxAssetScript.EquipmentAsset] = []
+
+var world_ages: Dictionary = {}               # id -> SandboxAssetScript.WorldAgeAsset (EraLibrary / Космические Эпохи)
+var world_age_list: Array[SandboxAssetScript.WorldAgeAsset] = []
+
 
 func _init() -> void:
 	init_all()
@@ -107,10 +119,21 @@ func init_all() -> void:
 	base_tile_list.clear()
 	citizen_jobs.clear()
 	citizen_job_list.clear()
+	worldbox_powers.clear()
+	worldbox_power_list.clear()
+	personal_traits.clear()
+	personal_trait_list.clear()
+	equipments.clear()
+	equipment_list.clear()
+	world_ages.clear()
+	world_age_list.clear()
 
 	_init_base_tiles()
 	_init_biomes()
 	_init_citizen_jobs()
+	_init_personal_traits()
+	_init_equipments()
+	_init_world_ages()
 	_init_subspecies_traits()
 	_init_culture_traits()
 	_init_ethos_traits()
@@ -121,6 +144,7 @@ func init_all() -> void:
 	_init_god_powers()
 	_init_cataclysm_powers()
 	_init_transmutation_powers()
+	_init_worldbox_powers()
 	_init_physical_constants()
 	_init_alchemical_matrix()
 	_init_world_laws()
@@ -2071,5 +2095,181 @@ func _init_citizen_jobs() -> void:
 	j_atk.work_duration = 1.2
 	j_atk.tool_sprite = "spear"
 	_add_citizen_job(j_atk)
+
+
+# ==============================================================================
+# 11. PERSONAL ACTOR TRAITS, EQUIPMENT FORGE, WORLD AGES & WORLDBOX POWERS
+# ==============================================================================
+func _add_personal_trait(pt: SandboxAssetScript.PersonalTraitAsset) -> void:
+	pt.index_id = personal_trait_list.size()
+	personal_traits[pt.id] = pt
+	personal_trait_list.append(pt)
+
+
+func _init_personal_traits() -> void:
+	var defs := [
+		["trait_giant", "Титан", "Огромный рост и колоссальный запас здоровья (+80 HP, урон +6).", 80, 6.0, 0.92, 1.35, 0.0, false, false, 0.0, Color(1.0, 0.62, 0.25)],
+		["trait_genius", "Квантовый Гений", "Выдающийся интеллект: ускоряет научный вклад и строительство.", 10, 2.0, 1.10, 1.0, 1.5, false, false, 0.0, Color(0.25, 0.92, 1.0)],
+		["trait_immortal", "Бессмертный", "Не стареет со временем и устойчив к энтропии.", 50, 4.0, 1.08, 1.05, 0.4, true, false, 1.5, Color(0.95, 0.85, 0.28)],
+		["trait_pyromaniac", "Пиромант", "Оставляет пламенные искры и поджигает вражеские рубежи в бою.", 15, 8.0, 1.12, 1.0, 0.0, false, true, 0.0, Color(1.0, 0.35, 0.15)],
+		["trait_veteran", "Закалённый Ветеран", "Мастер тактики ближнего и орбитального боя (+40 HP, урон +9).", 40, 9.0, 1.15, 1.08, 0.2, false, false, 0.5, Color(0.85, 0.32, 0.42)],
+		["trait_blessed", "Благословлённый Архитектором", "Озарён божественным светом (+65 HP, урон +10, скорость +20%).", 65, 10.0, 1.20, 1.15, 0.6, false, false, 2.0, Color(1.0, 0.92, 0.40)],
+		["trait_regenerator", "Нано-Регенератор", "Мгновенно затягивает боевые раны прямо на поле боя.", 35, 3.0, 1.05, 1.0, 0.0, false, false, 4.5, Color(0.32, 0.95, 0.55)]
+	]
+	for d in defs:
+		var pt := SandboxAssetScript.PersonalTraitAsset.new()
+		pt.id = d[0]
+		pt.title = d[1]
+		pt.description = d[2]
+		pt.hp_bonus = int(d[3])
+		pt.damage_bonus = float(d[4])
+		pt.speed_mult = float(d[5])
+		pt.scale_mult = float(d[6])
+		pt.intelligence_bonus = float(d[7])
+		pt.is_immortal = bool(d[8])
+		pt.ignites_fire = bool(d[9])
+		pt.regen_per_sec = float(d[10])
+		pt.color = d[11]
+		_add_personal_trait(pt)
+
+
+func _add_equipment(eq: SandboxAssetScript.EquipmentAsset) -> void:
+	eq.index_id = equipment_list.size()
+	equipments[eq.id] = eq
+	equipment_list.append(eq)
+
+
+func _init_equipments() -> void:
+	var defs := [
+		["eq_laser_blade", "Фазовый Клинок", "Оружие 1 ранга из кристаллической руды.", "weapon", 1, 3, 1, 7.0, 0.0, 10, Color(0.25, 0.95, 1.0)],
+		["eq_plasma_lance", "Плазменное Копьё", "Прожигает броню и укрепления противника.", "weapon", 2, 5, 2, 13.0, 0.0, 15, Color(1.0, 0.55, 0.18)],
+		["eq_tachyon_hammer", "Тахионный Молот", "Тяжёлое оружие штурмовиков и генералов.", "weapon", 3, 8, 3, 20.0, 2.0, 25, Color(0.95, 0.82, 0.25)],
+		["eq_void_rifle", "Пустотный Излучатель", "Реликтовое оружие высших техно-полисов.", "weapon", 4, 12, 4, 28.0, 3.0, 35, Color(0.85, 0.35, 1.0)],
+		["eq_nano_vest", "Нано-Кираса", "Лёгкая композитная броня пехотинца.", "armor", 1, 3, 1, 0.0, 4.0, 35, Color(0.45, 0.85, 0.95)],
+		["eq_titan_exo", "Экзоскелет «Титан»", "Тяжёлый боевой доспех гвардии полиса.", "armor", 2, 6, 2, 3.0, 8.0, 75, Color(0.95, 0.72, 0.28)],
+		["eq_aegis_shield", "Квантовый Щит «Эгида»", "Поглощает кинетический и термический урон.", "armor", 3, 10, 3, 5.0, 14.0, 120, Color(0.35, 1.0, 0.72)]
+	]
+	for d in defs:
+		var eq := SandboxAssetScript.EquipmentAsset.new()
+		eq.id = d[0]
+		eq.title = d[1]
+		eq.description = d[2]
+		eq.slot = d[3]
+		eq.tier = int(d[4])
+		eq.mineral_cost = int(d[5])
+		eq.wood_cost = int(d[6])
+		eq.damage_bonus = float(d[7])
+		eq.defense_bonus = float(d[8])
+		eq.hp_bonus = int(d[9])
+		eq.color = d[10]
+		_add_equipment(eq)
+
+
+func _add_world_age(wa: SandboxAssetScript.WorldAgeAsset) -> void:
+	wa.index_id = world_age_list.size()
+	world_ages[wa.id] = wa
+	world_age_list.append(wa)
+
+
+func _init_world_ages() -> void:
+	var defs := [
+		["age_of_hope", "Эпоха Гармонии (Age of Hope)", "Чистое небо, сбалансированный климат и расцвет молодых полисов.", Color(1.0, 1.0, 1.0, 1.0), 0.0, 1.0, 1.15, 0.85, false, false, Color(0.38, 0.92, 0.62)],
+		["age_of_sun", "Эпоха Солнечного Пика (Age of Sun)", "Яркое светило удваивает выработку солнечной энергии, но сушит почву и вызывает лесные пожары.", Color(1.06, 0.96, 0.84, 1.0), 14.0, 1.65, 1.05, 1.15, false, true, Color(1.0, 0.72, 0.22)],
+		["age_of_ice", "Эпоха Крио-Зимы (Age of Ice)", "Планетарное похолодание сковывает мелководье льдом и замедляет фермы, но ускоряет квантовые вычисления.", Color(0.84, 0.94, 1.08, 1.0), -22.0, 0.75, 1.40, 0.90, true, false, Color(0.38, 0.88, 1.0)],
+		["age_of_ash", "Эпоха Пепла и Раздора (Age of Chaos)", "Багровые сумерки повышают воинственность империй и провоцируют походы армий за территории.", Color(1.04, 0.84, 0.86, 1.0), 6.0, 0.85, 0.90, 2.20, false, true, Color(1.0, 0.36, 0.36)],
+		["age_of_wonders", "Эпоха Квантовых Чудес (Age of Wonders)", "Резонанс ноосферы ускоряет синтез законов физики и строительство мегаструктур.", Color(0.94, 0.90, 1.08, 1.0), 2.0, 1.25, 1.85, 0.70, false, false, Color(0.82, 0.48, 1.0)]
+	]
+	for d in defs:
+		var wa := SandboxAssetScript.WorldAgeAsset.new()
+		wa.id = d[0]
+		wa.title = d[1]
+		wa.description = d[2]
+		wa.ambient_tint = d[3]
+		wa.temp_offset_c = float(d[4])
+		wa.solar_mult = float(d[5])
+		wa.science_mult = float(d[6])
+		wa.war_aggression_mult = float(d[7])
+		wa.freezes_shallow_water = bool(d[8])
+		wa.sparks_wildfires = bool(d[9])
+		wa.color = d[10]
+		_add_world_age(wa)
+
+
+func _add_worldbox_power(gp: SandboxAssetScript.GodPowerAsset) -> void:
+	gp.index_id = worldbox_power_list.size()
+	worldbox_powers[gp.id] = gp
+	worldbox_power_list.append(gp)
+	god_powers[gp.id] = gp
+
+
+func _init_worldbox_powers() -> void:
+	var p_raise := SandboxAssetScript.GodPowerAsset.new()
+	p_raise.id = "power_raise_land"
+	p_raise.title = "Поднять Рельеф (384×216)"
+	p_raise.description = "Точечно поднимает уровень коры в высоком разрешении 384×216: создаёт острова, сухопутные мосты и горные гряды."
+	p_raise.tab_id = "alchemy"
+	p_raise.power_type = "terraforming_fine"
+	p_raise.height_delta = 0.16
+	p_raise.beam_color = Color(0.55, 0.85, 0.38)
+	_add_worldbox_power(p_raise)
+
+	var p_lower := SandboxAssetScript.GodPowerAsset.new()
+	p_lower.id = "power_lower_water"
+	p_lower.title = "Прорыть Пролив / Океан"
+	p_lower.description = "Точечно опускает рельеф в сетке 384×216: прорезает узкие судоходные каналы, бухты и глубоководные впадины."
+	p_lower.tab_id = "alchemy"
+	p_lower.power_type = "terraforming_fine"
+	p_lower.height_delta = -0.18
+	p_lower.beam_color = Color(0.25, 0.68, 1.0)
+	_add_worldbox_power(p_lower)
+
+	var p_sand := SandboxAssetScript.GodPowerAsset.new()
+	p_sand.id = "power_vortex_sand"
+	p_sand.title = "Насыпать Песчаную Косу"
+	p_sand.description = "Выравнивает микро-тайлы до уровня золотого пляжа (#F7E898), формируя атоллы и береговые отмели."
+	p_sand.tab_id = "alchemy"
+	p_sand.power_type = "terraforming_fine"
+	p_sand.height_delta = 0.04
+	p_sand.beam_color = Color(0.97, 0.91, 0.60)
+	_add_worldbox_power(p_sand)
+
+	var p_rain := SandboxAssetScript.GodPowerAsset.new()
+	p_rain.id = "power_living_rain"
+	p_rain.title = "Живительный Ливень"
+	p_rain.description = "Мгновенно тушит клеточные пожары, охлаждает лаву, исцеляет жителей и выращивает молодые деревья в зоне кисти."
+	p_rain.tab_id = "alchemy"
+	p_rain.power_type = "elemental_rain"
+	p_rain.temp_delta_c = -18.0
+	p_rain.beam_color = Color(0.32, 0.85, 1.0)
+	_add_worldbox_power(p_rain)
+
+	var p_fire := SandboxAssetScript.GodPowerAsset.new()
+	p_fire.id = "power_fire_spark"
+	p_fire.title = "Огненный Шторм (Пожар)"
+	p_fire.description = "Запускает клеточный пожар по сетке 384×216: огонь перекидывается с дерева на дерево и поджигает постройки."
+	p_fire.tab_id = "alchemy"
+	p_fire.power_type = "elemental_fire"
+	p_fire.temp_delta_c = 85.0
+	p_fire.beam_color = Color(1.0, 0.42, 0.12)
+	_add_worldbox_power(p_fire)
+
+	var p_fauna := SandboxAssetScript.GodPowerAsset.new()
+	p_fauna.id = "power_spawn_fauna"
+	p_fauna.title = "Заселить Дикую Фауну"
+	p_fauna.description = "Создаёт диких существ экосистемы (кристальных оленей, кибер-волков и пустотных виверн), живущих вне полисов."
+	p_fauna.tab_id = "life"
+	p_fauna.power_type = "spawn_fauna"
+	p_fauna.beam_color = Color(0.45, 0.95, 0.52)
+	_add_worldbox_power(p_fauna)
+
+	var p_bless := SandboxAssetScript.GodPowerAsset.new()
+	p_bless.id = "power_bless_unit"
+	p_bless.title = "Благословение Героев"
+	p_bless.description = "Наделяет всех жителей и солдат в радиусе кисти чертой «Благословлённый Архитектором», полным здоровьем и элитным оружием."
+	p_bless.tab_id = "life"
+	p_bless.power_type = "bless_units"
+	p_bless.beam_color = Color(1.0, 0.90, 0.32)
+	_add_worldbox_power(p_bless)
+
 
 

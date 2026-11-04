@@ -75,6 +75,10 @@ var _vbox_culture_content: VBoxContainer
 var _modal_analytics: PanelContainer
 var _vbox_analytics_content: VBoxContainer
 
+var _modal_world: PanelContainer
+var _vbox_world_content: VBoxContainer
+var renderer: Node = null
+
 
 func setup(simulation: WorldSimulationScript) -> void:
 	sim = simulation
@@ -197,10 +201,12 @@ func _build_ui_tree() -> void:
 	spd_box.add_child(_btn_speed_5)
 	spd_box.add_child(_btn_speed_25)
 
-	# Кнопки Кодекса, Законов Мира и Глобальной Аналитики
+	# Кнопки Кодекса, Законов Мира, Мира/Сохранений и Глобальной Аналитики
+	var btn_world := _create_top_action_btn("🌍 Мир", func() -> void: toggle_world_modal())
 	var btn_codex := _create_top_action_btn("📜 Кодекс", func() -> void: toggle_codex_modal())
 	var btn_laws := _create_top_action_btn("⚖ Законы", func() -> void: toggle_laws_modal())
 	var btn_analytics := _create_top_action_btn("📊 Аналитика [F9]", func() -> void: toggle_analytics_modal())
+	top_hbox.add_child(btn_world)
 	top_hbox.add_child(btn_codex)
 	top_hbox.add_child(btn_laws)
 	top_hbox.add_child(btn_analytics)
@@ -646,6 +652,44 @@ func _build_modals(root: Control) -> void:
 	_vbox_analytics_content.add_theme_constant_override("separation", 10)
 	ana_scroll.add_child(_vbox_analytics_content)
 
+	# 7. Модальное окно Управления Миром, Эпохами, Слоями и Сохранениями (World & Ages Modal)
+	_modal_world = PanelContainer.new()
+	_modal_world.name = "ModalWorld"
+	_modal_world.visible = false
+	_modal_world.anchor_left = 0.20
+	_modal_world.anchor_right = 0.80
+	_modal_world.anchor_top = 0.10
+	_modal_world.anchor_bottom = 0.86
+	_modal_world.add_theme_stylebox_override("panel", _make_panel_style(Color(0.03, 0.05, 0.11, 0.97), Color(0.35, 0.95, 0.72, 0.95), 10))
+	root.add_child(_modal_world)
+	register_modal("world", _modal_world)
+
+	var world_root_vb := VBoxContainer.new()
+	world_root_vb.add_theme_constant_override("separation", 8)
+	_modal_world.add_child(world_root_vb)
+
+	var world_header := HBoxContainer.new()
+	world_root_vb.add_child(world_header)
+	var world_title := Label.new()
+	world_title.text = "🌍 ГЕНЕРАТОР МИРА, КОСМИЧЕСКИЕ ЭПОХИ, СЛОИ И СОХРАНЕНИЯ"
+	world_title.add_theme_font_size_override("font_size", 15)
+	world_title.add_theme_color_override("font_color", Color(0.4, 0.95, 0.75))
+	world_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	world_header.add_child(world_title)
+	var btn_close_world := Button.new()
+	btn_close_world.text = "Закрыть [X]"
+	btn_close_world.pressed.connect(func() -> void: close_active_modal())
+	world_header.add_child(btn_close_world)
+
+	var world_scroll := ScrollContainer.new()
+	world_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	world_root_vb.add_child(world_scroll)
+
+	_vbox_world_content = VBoxContainer.new()
+	_vbox_world_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vbox_world_content.add_theme_constant_override("separation", 10)
+	world_scroll.add_child(_vbox_world_content)
+
 
 func register_modal(id: String, panel: PanelContainer) -> void:
 	_modals[id] = panel
@@ -673,6 +717,8 @@ func open_modal(id: String, target_param: Variant = null) -> void:
 			_refresh_codex_modal()
 		"laws":
 			_refresh_laws_modal()
+		"world":
+			_populate_world_modal()
 
 
 func close_active_modal() -> void:
@@ -712,6 +758,152 @@ func toggle_codex_modal() -> void:
 
 func toggle_laws_modal() -> void:
 	toggle_modal("laws")
+
+
+func toggle_world_modal() -> void:
+	toggle_modal("world")
+
+
+func _get_cosmic_renderer() -> Node:
+	if renderer != null and is_instance_valid(renderer):
+		return renderer
+	if get_parent() != null:
+		renderer = get_parent().find_child("CosmicRenderer", true, false)
+	return renderer
+
+
+func _populate_world_modal() -> void:
+	if _vbox_world_content == null or sim == null:
+		return
+	for ch in _vbox_world_content.get_children():
+		ch.queue_free()
+
+	# 1. Космические Эпохи (World Ages)
+	var age_sec := Label.new()
+	var cur_age := sim.get_current_world_age_asset()
+	age_sec.text = "1. КОСМИЧЕСКИЕ ЭПОХИ МИРА (Текущая: %s)" % (cur_age.title if cur_age != null else sim.current_age_id)
+	age_sec.add_theme_font_size_override("font_size", 13)
+	age_sec.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+	_vbox_world_content.add_child(age_sec)
+
+	var age_hb := HBoxContainer.new()
+	age_hb.add_theme_constant_override("separation", 6)
+	_vbox_world_content.add_child(age_hb)
+	for wa in sim.assets.world_age_list:
+		var ab := Button.new()
+		ab.text = wa.title
+		var aid: String = wa.id
+		ab.pressed.connect(func() -> void:
+			sim.set_world_age(aid)
+			_populate_world_modal()
+		)
+		age_hb.add_child(ab)
+
+	_vbox_world_content.add_child(HSeparator.new())
+
+	# 2. Генератор Шаблонов Мира (New World Templates)
+	var gen_sec := Label.new()
+	gen_sec.text = "2. ГЕНЕРАТОР НОВОГО МИРА (Шаблон: %s | Seed: %d)" % [sim.map_template_id, sim.world_seed]
+	gen_sec.add_theme_font_size_override("font_size", 13)
+	gen_sec.add_theme_color_override("font_color", Color(0.4, 0.9, 1.0))
+	_vbox_world_content.add_child(gen_sec)
+
+	var gen_hb := HBoxContainer.new()
+	gen_hb.add_theme_constant_override("separation", 8)
+	_vbox_world_content.add_child(gen_hb)
+	var tpls := [
+		{"id": "archipelago", "title": "🏝 Архипелаг"},
+		{"id": "pangaea", "title": "🌍 Суперконтинент Пангея"},
+		{"id": "ring_atoll", "title": "⭕ Кольцевой Атолл"},
+		{"id": "shattered_isles", "title": "🌊 Осколки Островов"}
+	]
+	for tp in tpls:
+		var gb := Button.new()
+		gb.text = tp["title"]
+		var tid: String = tp["id"]
+		gb.pressed.connect(func() -> void:
+			sim.generate_world_with_template(sim.world_seed + 137, tid, 0.0)
+			_populate_world_modal()
+		)
+		gen_hb.add_child(gb)
+
+	_vbox_world_content.add_child(HSeparator.new())
+
+	# 3. Переключатели Слоёв Карты (Map Overlays)
+	var layer_sec := Label.new()
+	layer_sec.text = "3. СЛОИ ОТОБРАЖЕНИЯ КАРТЫ (WORLDBOX OVERLAYS)"
+	layer_sec.add_theme_font_size_override("font_size", 13)
+	layer_sec.add_theme_color_override("font_color", Color(0.45, 0.95, 0.72))
+	_vbox_world_content.add_child(layer_sec)
+
+	var rend := _get_cosmic_renderer()
+	var cb_banners := CheckButton.new()
+	cb_banners.text = "Показывать таблички-баннеры полисов (без наложений)"
+	cb_banners.button_pressed = bool(rend.get("show_city_banners")) if rend != null else true
+	cb_banners.toggled.connect(func(v: bool) -> void:
+		var r := _get_cosmic_renderer()
+		if r != null:
+			r.set("show_city_banners", v)
+			r.queue_redraw()
+	)
+	_vbox_world_content.add_child(cb_banners)
+
+	var cb_dip := CheckButton.new()
+	cb_dip.text = "Показывать линии дипломатии, войн и торговых караванов"
+	cb_dip.button_pressed = bool(rend.get("show_diplomacy_lines")) if rend != null else true
+	cb_dip.toggled.connect(func(v: bool) -> void:
+		var r := _get_cosmic_renderer()
+		if r != null:
+			r.set("show_diplomacy_lines", v)
+			r.queue_redraw()
+	)
+	_vbox_world_content.add_child(cb_dip)
+
+	var cb_armies := CheckButton.new()
+	cb_armies.text = "Показывать боевые знамёна генералов армий"
+	cb_armies.button_pressed = bool(rend.get("show_army_banners")) if rend != null else true
+	cb_armies.toggled.connect(func(v: bool) -> void:
+		var r := _get_cosmic_renderer()
+		if r != null:
+			r.set("show_army_banners", v)
+			r.queue_redraw()
+	)
+	_vbox_world_content.add_child(cb_armies)
+
+	_vbox_world_content.add_child(HSeparator.new())
+
+	# 4. Слоты Сохранения и Загрузки Мира (Save / Load Slots)
+	var save_sec := Label.new()
+	save_sec.text = "4. СОХРАНЕНИЕ И ЗАГРУЗКА МИРА (user://saves/)"
+	save_sec.add_theme_font_size_override("font_size", 13)
+	save_sec.add_theme_color_override("font_color", Color(0.95, 0.78, 1.0))
+	_vbox_world_content.add_child(save_sec)
+
+	for slot_i in range(1, 4):
+		var s_hb := HBoxContainer.new()
+		s_hb.add_theme_constant_override("separation", 10)
+		_vbox_world_content.add_child(s_hb)
+		var s_lbl := Label.new()
+		s_lbl.text = "Слот сохранения #%d:" % slot_i
+		s_lbl.custom_minimum_size = Vector2(180, 0)
+		s_hb.add_child(s_lbl)
+
+		var btn_save := Button.new()
+		btn_save.text = "💾 Сохранить в Слот #%d" % slot_i
+		var s_idx: int = slot_i
+		btn_save.pressed.connect(func() -> void:
+			sim.save_world_to_slot(s_idx)
+			_populate_world_modal()
+		)
+		s_hb.add_child(btn_save)
+
+		var btn_load := Button.new()
+		btn_load.text = "📂 Загрузить Слот #%d" % slot_i
+		btn_load.pressed.connect(func() -> void:
+			sim.load_world_from_slot(s_idx)
+			_populate_world_modal()
+		)
+		s_hb.add_child(btn_load)
 
 
 func set_event_filter(filter_cat: String) -> void:
@@ -1011,6 +1203,18 @@ func _populate_city_inspector(city_id: int) -> void:
 		dp_l.text = "🤝 Дипломатический проект: %s [%d%%]" % [dp_dict.get("title", ""), dp_pct]
 		_vbox_city_content.add_child(dp_l)
 
+	var st_dict: Dictionary = c_data.get("storage", {})
+	var st_l := Label.new()
+	st_l.text = "📦 Склад полиса: Дерево: %d | Минералы: %d | Пища: %d | Зон 8×8: %d | Выковано в кузнице: %d" % [
+		int(st_dict.get("wood", 0)),
+		int(st_dict.get("minerals", 0)),
+		int(st_dict.get("food", 0)),
+		int(c_data.get("claimed_zones_count", 0)),
+		int(c_data.get("forged_items_count", 0))
+	]
+	st_l.add_theme_color_override("font_color", Color(0.85, 0.95, 0.65))
+	_vbox_city_content.add_child(st_l)
+
 
 func _populate_actor_inspector(actor_id: int) -> void:
 	if _vbox_actor_content == null:
@@ -1031,12 +1235,21 @@ func _populate_actor_inspector(actor_id: int) -> void:
 	var top_hb := HBoxContainer.new()
 	_vbox_actor_content.add_child(top_hb)
 
+	var is_fav: bool = bool(a_data.get("is_favorite", false))
 	var name_l := Label.new()
-	name_l.text = "👤 %s [%s]" % [a_data.get("name", "Юнит"), a_data.get("role", "Житель")]
+	name_l.text = "%s %s [%s]" % ["★" if is_fav else "👤", a_data.get("name", "Юнит"), a_data.get("role", "Житель")]
 	name_l.add_theme_font_size_override("font_size", 16)
 	name_l.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
 	name_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_hb.add_child(name_l)
+
+	var btn_fav := Button.new()
+	btn_fav.text = "★ Избранный" if is_fav else "☆ В Избранные"
+	btn_fav.pressed.connect(func() -> void:
+		sim.toggle_actor_favorite(actor_id)
+		_populate_actor_inspector(actor_id)
+	)
+	top_hb.add_child(btn_fav)
 
 	var btn_pan := Button.new()
 	btn_pan.text = "🎯 Найти на карте"
@@ -1050,6 +1263,7 @@ func _populate_actor_inspector(actor_id: int) -> void:
 
 	_vbox_actor_content.add_child(HSeparator.new())
 
+	var max_hp_v: int = maxi(100, int(a_data.get("max_hp", 100)))
 	var hp_hb := HBoxContainer.new()
 	_vbox_actor_content.add_child(hp_hb)
 	var hp_lbl := Label.new()
@@ -1058,15 +1272,48 @@ func _populate_actor_inspector(actor_id: int) -> void:
 	hp_hb.add_child(hp_lbl)
 	var hp_bar := ProgressBar.new()
 	hp_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hp_bar.max_value = float(max_hp_v)
 	hp_bar.value = float(a_data.get("hp", 100))
 	hp_hb.add_child(hp_bar)
 	var hp_val := Label.new()
-	hp_val.text = "%d / 100 HP" % int(a_data.get("hp", 100))
+	hp_val.text = "%d / %d HP" % [int(a_data.get("hp", 100)), max_hp_v]
 	hp_hb.add_child(hp_val)
 
 	var age_l := Label.new()
-	age_l.text = "Возраст: %d циклов | Подвид: %s" % [int(a_data.get("age", 0)), a_data.get("subspecies_name", "")]
+	age_l.text = "Возраст: %d циклов | Подвид: %s | Клан: %s" % [
+		int(a_data.get("age", 0)), a_data.get("subspecies_name", ""), a_data.get("clan_name", "—")
+	]
 	_vbox_actor_content.add_child(age_l)
+
+	var combat_l := Label.new()
+	combat_l.text = "⚔ Боевой опыт: Уровень %d | Побед: %d | Урон: %d | Броня: %d" % [
+		int(a_data.get("level", 1)), int(a_data.get("kills", 0)),
+		int(a_data.get("combat_damage", 16)), int(a_data.get("armor_defense", 0))
+	]
+	combat_l.add_theme_color_override("font_color", Color(1.0, 0.78, 0.42))
+	_vbox_actor_content.add_child(combat_l)
+
+	var w_id: String = str(a_data.get("weapon_id", ""))
+	var ar_id: String = str(a_data.get("armor_id", ""))
+	var w_title: String = sim.assets.equipments[w_id].title if sim.assets.equipments.has(w_id) else "Нет"
+	var ar_title: String = sim.assets.equipments[ar_id].title if sim.assets.equipments.has(ar_id) else "Нет"
+	var eq_l := Label.new()
+	eq_l.text = "🛡 Снаряжение кузницы: Оружие: %s | Доспех: %s" % [w_title, ar_title]
+	eq_l.add_theme_color_override("font_color", Color(0.55, 0.92, 1.0))
+	_vbox_actor_content.add_child(eq_l)
+
+	var ptrs: Array = a_data.get("personal_traits", [])
+	var ptr_names: Array[String] = []
+	for pt_id in ptrs:
+		if sim.assets.personal_traits.has(pt_id):
+			var pt_asset: SandboxAssetScript.PersonalTraitAsset = sim.assets.personal_traits[pt_id]
+			ptr_names.append(pt_asset.title)
+		else:
+			ptr_names.append(str(pt_id))
+	var ptr_l := Label.new()
+	ptr_l.text = "🧬 Личные черты: %s" % (", ".join(ptr_names) if not ptr_names.is_empty() else "Обычный")
+	ptr_l.add_theme_color_override("font_color", Color(0.65, 0.95, 0.75))
+	_vbox_actor_content.add_child(ptr_l)
 
 	var c_id: int = int(a_data.get("city_id", -1))
 	var c_hb := HBoxContainer.new()
@@ -1349,7 +1596,10 @@ func _select_tab(tab_id: String) -> void:
 		ch.queue_free()
 
 	var first_id: String = ""
-	for gp in sim.assets.god_power_list:
+	var all_tab_powers: Array[SandboxAssetScript.GodPowerAsset] = []
+	all_tab_powers.append_array(sim.assets.god_power_list)
+	all_tab_powers.append_array(sim.assets.worldbox_power_list)
+	for gp in all_tab_powers:
 		if gp.tab_id != selected_tab:
 			continue
 		if first_id == "":
@@ -1382,10 +1632,13 @@ func _select_power(power_id: String) -> void:
 		if gp != null:
 			_lbl_power_desc.text = "[%s]: %s (ЛКМ по 2D-карте — применить кисть, ПКМ/WASD — двигать камеру, Колесо — зум)" % [gp.title, gp.description]
 	# Перерисуем подсветку кнопок текущей вкладки
+	var all_tab_powers: Array[SandboxAssetScript.GodPowerAsset] = []
+	all_tab_powers.append_array(sim.assets.god_power_list)
+	all_tab_powers.append_array(sim.assets.worldbox_power_list)
 	for ch in _hbox_powers.get_children():
 		if ch is Button:
 			var b: Button = ch
-			for gp in sim.assets.god_power_list:
+			for gp in all_tab_powers:
 				if gp.tab_id == selected_tab and gp.title == b.text:
 					var is_sel: bool = (gp.id == selected_power_id)
 					var pcol: Color = gp.beam_color
