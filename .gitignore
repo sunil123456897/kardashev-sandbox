@@ -15,6 +15,23 @@ mono_crash.*.json
 # Agent orchestration & local reference docs
 .agents/
 .teamwork_archive/
+graphify-out/
 *.pdf
 *.tmp
 *.log
+
+# Heavy 3D intermediate build sources (kept locally on disk; 2D PBR sprite sheets & atlases are tracked)
+*.blend
+*.blend1
+*.glb
+assets/generated/trellis_batch_inputs.zip
+assets/generated/*/*_2k.png
+assets/generated/*/*_albedo.png
+assets/generated/*/*_preview_raw.png
+assets/generated/*/*_rgba.png
+assets/generated/*/sprites_2d/diffuse_*.png
+assets/generated/*/sprites_2d/normal_*.png
+assets/generated/*/sprites_2d/spec_*.png
+assets/generated/*/sprites_2d/*_2d_spritesheet_diffuse.png
+assets/generated/*/sprites_2d/*_2d_spritesheet_normal.png
+assets/generated/*/sprites_2d/*_2d_spritesheet_specular.png

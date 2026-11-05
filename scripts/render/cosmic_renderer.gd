@@ -69,9 +69,48 @@ var _mm_actors_material: ShaderMaterial
 var _atlas_flora_tex: ImageTexture
 var _atlas_building_tex: ImageTexture
 var _atlas_actor_tex: ImageTexture
+var _wb_tex_cache: Dictionary = {}
 var _flora_type_to_col: Dictionary = {}
 var _building_arch_to_col: Dictionary = {}
 var _actor_key_to_col: Dictionary = {}
+var _point_lights: Array[PointLight2D] = []
+var _light_radial_tex: ImageTexture = null
+var active_point_light_count: int = 0
+
+
+func _load_wb_tex(res_path: String) -> ImageTexture:
+	if _wb_tex_cache.has(res_path):
+		return _wb_tex_cache[res_path]
+	var abs_p: String = ProjectSettings.globalize_path(res_path)
+	if FileAccess.file_exists(abs_p):
+		var img := Image.load_from_file(abs_p)
+		if img != null and not img.is_empty():
+			var tex := ImageTexture.create_from_image(img)
+			_wb_tex_cache[res_path] = tex
+			return tex
+	return null
+
+
+func _load_wb_canvas_tex(diff_path: String, norm_path: String = "", spec_path: String = "") -> Texture2D:
+	var cache_key: String = diff_path + "|CANVAS_PBR"
+	if _wb_tex_cache.has(cache_key):
+		return _wb_tex_cache[cache_key]
+	var diff_tex: ImageTexture = _load_wb_tex(diff_path)
+	if diff_tex == null:
+		return null
+	var norm_tex: ImageTexture = _load_wb_tex(norm_path) if norm_path != "" else null
+	var spec_tex: ImageTexture = _load_wb_tex(spec_path) if spec_path != "" else null
+	if norm_tex == null and spec_tex == null:
+		return diff_tex
+	var ctex := CanvasTexture.new()
+	ctex.diffuse_texture = diff_tex
+	ctex.normal_texture = norm_tex
+	ctex.specular_texture = spec_tex
+	ctex.specular_color = Color(0.95, 0.98, 1.0)
+	ctex.specular_shininess = 0.65
+	ctex.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_wb_tex_cache[cache_key] = ctex
+	return ctex
 
 # Палитра базовых тайлов WorldBox v0.51.2 (из декомпилированного TileLibrary)
 const WB_DEEP_OCEAN := Color(0.200, 0.439, 0.800)      # #3370CC
@@ -128,6 +167,7 @@ func setup(simulation: WorldSimulationScript) -> void:
 	_build_pixel_art_sprites()
 	_init_space_backdrop()
 	_init_multimesh_layers()
+	_init_dynamic_2d_lights()
 	_init_shaders()
 
 	_map_image = Image.create(TEX_W, TEX_H, false, Image.FORMAT_RGBA8)
@@ -147,6 +187,7 @@ func setup(simulation: WorldSimulationScript) -> void:
 
 	_refresh_counts()
 	_update_multimeshes(0.0)
+	_update_dynamic_2d_lights()
 	queue_redraw()
 
 
@@ -179,7 +220,8 @@ func _create_2d_quad_mesh(w: float, h: float) -> ArrayMesh:
 
 
 func _init_multimesh_layers() -> void:
-	# 0. Полноэкранный пиксельный фон карты (show_behind_parent = true, рисуется первым)
+	light_mask = 2
+	# 0. Полноэкранный пиксельный фон карты (show_behind_parent = true, рисуется первым; light_mask = 0 чтобы не засвечивать плоский ландшафт)
 	if _map_bg_rect == null:
 		_map_bg_rect = TextureRect.new()
 		_map_bg_rect.name = "WorldBoxMapBgRect"
@@ -188,6 +230,7 @@ func _init_multimesh_layers() -> void:
 		_map_bg_rect.stretch_mode = TextureRect.STRETCH_SCALE
 		_map_bg_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		_map_bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_map_bg_rect.light_mask = 0
 		_map_bg_rect.show_behind_parent = true
 		add_child(_map_bg_rect)
 
@@ -198,13 +241,19 @@ func _init_multimesh_layers() -> void:
 		_mm_flora = MultiMeshInstance2D.new()
 		_mm_flora.name = "MultiMeshFlora"
 		_mm_flora.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_mm_flora.light_mask = 2
 		_mm_flora.show_behind_parent = true
-		_mm_flora.texture = _atlas_flora_tex
+		var wb_flora_tex: Texture2D = _load_wb_canvas_tex(
+			"res://assets/worldbox/atlas_flora_wb.png",
+			"res://assets/worldbox/atlas_flora_wb_normal.png",
+			"res://assets/worldbox/atlas_flora_wb_specular.png"
+		)
+		_mm_flora.texture = wb_flora_tex if wb_flora_tex != null else _atlas_flora_tex
 		var mm_f := MultiMesh.new()
 		mm_f.transform_format = MultiMesh.TRANSFORM_2D
 		mm_f.use_colors = true
 		mm_f.use_custom_data = true
-		mm_f.mesh = _create_2d_quad_mesh(20.0, 20.0)
+		mm_f.mesh = _create_2d_quad_mesh(28.0, 28.0)
 		mm_f.instance_count = 0
 		_mm_flora.multimesh = mm_f
 		if wb_shader != null:
@@ -212,6 +261,12 @@ func _init_multimesh_layers() -> void:
 			_mm_flora_material.shader = wb_shader
 			_mm_flora_material.set_shader_parameter("atlas_cols", 10.0)
 			_mm_flora_material.set_shader_parameter("sway_strength", 2.1)
+			var fn_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_flora_wb_normal.png")
+			var fs_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_flora_wb_specular.png")
+			if fn_tex != null and fs_tex != null:
+				_mm_flora_material.set_shader_parameter("use_pbr_maps", true)
+				_mm_flora_material.set_shader_parameter("normal_atlas", fn_tex)
+				_mm_flora_material.set_shader_parameter("spec_atlas", fs_tex)
 			_mm_flora.material = _mm_flora_material
 		add_child(_mm_flora)
 
@@ -220,13 +275,19 @@ func _init_multimesh_layers() -> void:
 		_mm_buildings = MultiMeshInstance2D.new()
 		_mm_buildings.name = "MultiMeshBuildings"
 		_mm_buildings.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_mm_buildings.light_mask = 2
 		_mm_buildings.show_behind_parent = true
-		_mm_buildings.texture = _atlas_building_tex
+		var wb_bld_tex: Texture2D = _load_wb_canvas_tex(
+			"res://assets/worldbox/atlas_buildings_wb.png",
+			"res://assets/worldbox/atlas_buildings_wb_normal.png",
+			"res://assets/worldbox/atlas_buildings_wb_specular.png"
+		)
+		_mm_buildings.texture = wb_bld_tex if wb_bld_tex != null else _atlas_building_tex
 		var mm_b := MultiMesh.new()
 		mm_b.transform_format = MultiMesh.TRANSFORM_2D
 		mm_b.use_colors = true
 		mm_b.use_custom_data = true
-		mm_b.mesh = _create_2d_quad_mesh(26.0, 26.0)
+		mm_b.mesh = _create_2d_quad_mesh(34.0, 34.0)
 		mm_b.instance_count = 0
 		_mm_buildings.multimesh = mm_b
 		if wb_shader != null:
@@ -234,6 +295,12 @@ func _init_multimesh_layers() -> void:
 			_mm_buildings_material.shader = wb_shader
 			_mm_buildings_material.set_shader_parameter("atlas_cols", 8.0)
 			_mm_buildings_material.set_shader_parameter("sway_strength", 0.0)
+			var bn_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_buildings_wb_normal.png")
+			var bs_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_buildings_wb_specular.png")
+			if bn_tex != null and bs_tex != null:
+				_mm_buildings_material.set_shader_parameter("use_pbr_maps", true)
+				_mm_buildings_material.set_shader_parameter("normal_atlas", bn_tex)
+				_mm_buildings_material.set_shader_parameter("spec_atlas", bs_tex)
 			_mm_buildings.material = _mm_buildings_material
 		add_child(_mm_buildings)
 
@@ -243,12 +310,13 @@ func _init_multimesh_layers() -> void:
 		_mm_actors.name = "MultiMeshActors"
 		_mm_actors.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		_mm_actors.show_behind_parent = true
-		_mm_actors.texture = _atlas_actor_tex
+		var wb_act_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_actors_wb.png")
+		_mm_actors.texture = wb_act_tex if wb_act_tex != null else _atlas_actor_tex
 		var mm_a := MultiMesh.new()
 		mm_a.transform_format = MultiMesh.TRANSFORM_2D
 		mm_a.use_colors = true
 		mm_a.use_custom_data = true
-		mm_a.mesh = _create_2d_quad_mesh(16.0, 16.0)
+		mm_a.mesh = _create_2d_quad_mesh(15.0, 15.0)
 		mm_a.instance_count = 0
 		_mm_actors.multimesh = mm_a
 		if wb_shader != null:
@@ -258,6 +326,129 @@ func _init_multimesh_layers() -> void:
 			_mm_actors_material.set_shader_parameter("sway_strength", 0.0)
 			_mm_actors.material = _mm_actors_material
 		add_child(_mm_actors)
+
+
+func _init_dynamic_2d_lights() -> void:
+	if _light_radial_tex == null:
+		var sz: int = 96
+		var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+		var half: float = float(sz) * 0.5
+		for y in range(sz):
+			for x in range(sz):
+				var dx: float = (float(x) + 0.5 - half) / half
+				var dy: float = (float(y) + 0.5 - half) / half
+				var d: float = clampf(sqrt(dx * dx + dy * dy), 0.0, 1.0)
+				var falloff: float = pow(1.0 - d, 2.2)
+				img.set_pixel(x, y, Color(1.0, 1.0, 1.0, falloff))
+		_light_radial_tex = ImageTexture.create_from_image(img)
+
+	if _point_lights.is_empty():
+		for i in range(16):
+			var pl := PointLight2D.new()
+			pl.name = "DynamicPBRPointLight_%d" % i
+			pl.texture = _light_radial_tex
+			pl.blend_mode = Light2D.BLEND_MODE_ADD
+			pl.range_item_cull_mask = 2
+			pl.height = 28.0
+			pl.range_z_min = -1024
+			pl.range_z_max = 1024
+			pl.enabled = false
+			add_child(pl)
+			_point_lights.append(pl)
+
+
+func _update_dynamic_2d_lights() -> void:
+	if sim == null or _point_lights.is_empty():
+		return
+	var used: int = 0
+	var max_lights: int = _point_lights.size()
+
+	if view_mode == 0:
+		# 1. Исполинский Меха-Колосс К-Титан — бирюзовое свечение дугового реактора по 2D-нормалям без пересвета
+		for a in sim.actors:
+			if bool(a.get("is_colossus", false)) and used < max_lights:
+				var pl_c: PointLight2D = _point_lights[used]
+				pl_c.enabled = true
+				pl_c.position = (a["pos"] as Vector2) + Vector2(0.0, -24.0)
+				pl_c.color = Color(0.22, 0.94, 1.0)
+				pl_c.energy = 0.28 + sin(_anim_time * 6.0) * 0.05
+				pl_c.texture_scale = 1.65
+				pl_c.height = 38.0
+				used += 1
+
+		# 2. Взлетающие ракеты Роя Дайсона и ударные волны
+		for r in _active_rockets:
+			if used >= max_lights:
+				break
+			var pl_r: PointLight2D = _point_lights[used]
+			pl_r.enabled = true
+			pl_r.position = r["pos"]
+			pl_r.color = Color(1.0, 0.68, 0.24)
+			pl_r.energy = 0.34
+			pl_r.texture_scale = 1.55
+			pl_r.height = 32.0
+			used += 1
+
+		for sw in _active_shockwaves:
+			if used >= max_lights:
+				break
+			var pl_sw: PointLight2D = _point_lights[used]
+			pl_sw.enabled = true
+			pl_sw.position = sw["pos"]
+			pl_sw.color = sw["color"]
+			pl_sw.energy = 0.45 * clampf(float(sw["life"]) / maxf(0.01, float(sw["max_life"])), 0.0, 1.0)
+			pl_sw.texture_scale = 2.2
+			pl_sw.height = 44.0
+			used += 1
+
+		# 3. Костры на главных площадях полисов — тёплое живое пламя на 2D-нормалях зданий Кардашёва
+		for c_id in sim.cities_map.keys():
+			if used >= max_lights:
+				break
+			var city: Dictionary = sim.cities_map[c_id]
+			var fire_p: Vector2 = (city["map_pos"] as Vector2) + Vector2(8.0, 5.0)
+			var pl_f: PointLight2D = _point_lights[used]
+			pl_f.enabled = true
+			pl_f.position = fire_p
+			pl_f.color = Color(1.0, 0.62, 0.22)
+			pl_f.energy = 0.32 + sin(_anim_time * 9.0 + float(c_id) * 1.7) * 0.06
+			pl_f.texture_scale = 1.65
+			pl_f.height = 24.0
+			used += 1
+
+		# 4. Экзотические реликвии и кристаллы (Монолит Возвышения, Пьезо-Кристалл, Разлом Плазмы)
+		for fl in sim.flora_instances:
+			if used >= max_lights:
+				break
+			var f_t: String = str(fl.get("type", ""))
+			if f_t in ["void_monolith", "piezo_spire", "lava_vent", "cyber_node"]:
+				var pl_e: PointLight2D = _point_lights[used]
+				pl_e.enabled = true
+				pl_e.position = fl["pos"]
+				if f_t == "lava_vent":
+					pl_e.color = Color(1.0, 0.48, 0.14)
+				elif f_t == "void_monolith":
+					pl_e.color = Color(0.35, 0.95, 0.92)
+				else:
+					pl_e.color = Color(0.28, 0.78, 1.0)
+				pl_e.energy = 0.26
+				pl_e.texture_scale = 1.25
+				pl_e.height = 22.0
+				used += 1
+	elif view_mode == 2:
+		# В режиме 3:Система центральная звезда освещает 2D-нормали дронов Пояса Астероидов
+		var pl_star: PointLight2D = _point_lights[0]
+		pl_star.enabled = true
+		pl_star.position = Vector2(950.0, 500.0)
+		pl_star.color = sim.star_color.lightened(0.25)
+		pl_star.energy = 0.42
+		pl_star.texture_scale = 9.5
+		pl_star.height = 64.0
+		used = 1
+
+	for idx in range(used, max_lights):
+		_point_lights[idx].enabled = false
+	active_point_light_count = used
 
 
 func _sync_multimesh_visibility() -> void:
@@ -359,7 +550,7 @@ func _update_multimeshes(_delta: float) -> void:
 			var col_idx: float = float(_actor_key_to_col.get("%s_%d" % [arch, u_frame], 0))
 			var flip_x: float = -1.0 if bool(a.get("facing_left", false)) else 1.0
 			var ptrs: Array = a.get("personal_traits", [])
-			var scale_m: float = 1.38 if ptrs.has("trait_giant") else (1.15 if str(a.get("role", "")) == "general" else 1.0)
+			var scale_m: float = 0.0 if bool(a.get("is_colossus", false)) else (1.38 if ptrs.has("trait_giant") else (1.15 if str(a.get("role", "")) == "general" else 1.0))
 			var xf := Transform2D(Vector2(flip_x * scale_m, 0.0), Vector2(0.0, scale_m), a_pos + Vector2(0.0, -2.0))
 			var walk_ph: float = -maxf(0.02, float(a.get("anim_phase", 0.5)))
 			var hit_fl: float = 0.85 if str(a.get("job_state", "")) == "WORKING" and sin(float(a.get("tool_swing", 0.0))) > 0.7 else 0.0
@@ -485,6 +676,7 @@ func _process(delta: float) -> void:
 
 	_refresh_counts()
 	_update_multimeshes(delta)
+	_update_dynamic_2d_lights()
 	queue_redraw()
 
 
@@ -914,7 +1106,7 @@ func _draw_mode_planet_worldbox() -> void:
 	if _map_bg_rect == null and _map_texture != null:
 		draw_texture_rect(_map_texture, Rect2(0.0, 0.0, 1920.0, 1080.0), false)
 
-	# 2. Анимированные пиксельные блики волн на воде
+	# 2. Анимированные двухтоновые пиксельные блики волн на воде
 	var wave_shift: int = int(_anim_time * 3.0)
 	for i in range(0, sim.TILE_COUNT, 3):
 		var t: Dictionary = sim.tiles[i]
@@ -922,7 +1114,9 @@ func _draw_mode_planet_worldbox() -> void:
 			var mp: Vector2 = t["map_pos"]
 			var wx: float = mp.x + float(((i * 17 + wave_shift) % 7) - 3) * 5.0
 			var wy: float = mp.y + float(((i * 11) % 5) - 2) * 5.0
-			draw_rect(Rect2(wx, wy, 10.0, 3.0), Color(0.72, 0.94, 1.0, 0.28), true)
+			draw_rect(Rect2(wx, wy + 2.0, 10.0, 2.0), Color(0.04, 0.14, 0.28, 0.35), true)
+			draw_rect(Rect2(wx, wy, 10.0, 2.0), Color(0.68, 0.94, 1.0, 0.30), true)
+			draw_rect(Rect2(wx + 2.0, wy, 4.0, 2.0), Color(0.90, 0.99, 1.0, 0.36), true)
 
 	# 3. Флора и минералы рендерятся батчем через _mm_flora (MultiMeshInstance2D + worldbox_multimesh.gdshader)
 	# 4. Племенные костры (WorldBox Bonfire), ветряные мельницы (Windmill), пирсы и компактные маяки поверх зданий (_mm_buildings)
@@ -930,17 +1124,26 @@ func _draw_mode_planet_worldbox() -> void:
 		var city: Dictionary = sim.cities_map[c_id]
 		var c_col: Color = city["color"]
 		var c_center: Vector2 = city["map_pos"]
-		# Племенной костёр (WorldBox Bonfire) с мерцающим пламенем на главной площади каждого поселения
-		var fire_p: Vector2 = c_center + Vector2(7.0, 4.0)
-		var f_flicker: float = sin(_anim_time * 11.0 + float(c_id) * 1.7) * 1.5
-		draw_rect(Rect2(fire_p.x - 4.0, fire_p.y + 1.0, 8.0, 3.0), Color(0.42, 0.25, 0.12), true)
-		draw_rect(Rect2(fire_p.x - 3.0, fire_p.y - 4.0 - absf(f_flicker), 6.0, 5.0 + absf(f_flicker)), Color(1.0, 0.45, 0.08, 0.95), true)
-		draw_rect(Rect2(fire_p.x - 1.5, fire_p.y - 3.0 - absf(f_flicker) * 0.6, 3.0, 3.5), Color(1.0, 0.92, 0.28, 0.98), true)
+		# Племенной костёр (WorldBox Bonfire: 4-кадровый оригинальный спрайт bonfire#0@0..3) на главной площади каждого поселения
+		var fire_p: Vector2 = c_center + Vector2(8.0, 5.0)
+		var bf_frame: int = int(_anim_time * 8.0 + float(c_id) * 1.7) % 4
+		var bf_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/map/bonfire_%d.png" % bf_frame)
+		if bf_tex != null:
+			draw_texture_rect(bf_tex, Rect2(fire_p.x - 9.0, fire_p.y - 12.0, 18.0, 17.0), false)
+		else:
+			var f_flicker: float = sin(_anim_time * 11.0 + float(c_id) * 1.7) * 1.5
+			draw_rect(Rect2(fire_p.x - 4.0, fire_p.y + 1.0, 8.0, 3.0), Color(0.42, 0.25, 0.12), true)
+			draw_rect(Rect2(fire_p.x - 3.0, fire_p.y - 4.0 - absf(f_flicker), 6.0, 5.0 + absf(f_flicker)), Color(1.0, 0.45, 0.08, 0.95), true)
+			draw_rect(Rect2(fire_p.x - 1.5, fire_p.y - 3.0 - absf(f_flicker) * 0.6, 3.0, 3.5), Color(1.0, 0.92, 0.28, 0.98), true)
 
 		if bool(city.get("has_dock", false)):
 			var d_pos: Vector2 = city.get("dock_pos", city["map_pos"])
-			draw_rect(Rect2(d_pos.x - 10.0, d_pos.y - 4.0, 20.0, 8.0), Color(0.45, 0.30, 0.18), true)
-			draw_rect(Rect2(d_pos.x - 8.0, d_pos.y - 2.0, 16.0, 4.0), c_col.lightened(0.25), true)
+			var dock_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/map/docks_human.png")
+			if dock_tex != null:
+				draw_texture_rect(dock_tex, Rect2(d_pos.x - 13.0, d_pos.y - 18.0, 26.0, 32.0), false)
+			else:
+				draw_rect(Rect2(d_pos.x - 10.0, d_pos.y - 4.0, 20.0, 8.0), Color(0.45, 0.30, 0.18), true)
+				draw_rect(Rect2(d_pos.x - 8.0, d_pos.y - 2.0, 16.0, 4.0), c_col.lightened(0.25), true)
 		var inst_list: Array = city["building_instances"]
 		for b_inst in inst_list:
 			var b_pos: Vector2 = b_inst["map_pos"]
@@ -958,16 +1161,30 @@ func _draw_mode_planet_worldbox() -> void:
 				var top_p: Vector2 = b_pos + Vector2(0.0, -11.0)
 				draw_rect(Rect2(top_p.x - 3.0, top_p.y - 2.0, 6.0, 4.0), Color(0.45, 0.95, 1.0, 0.85), true)
 
-	# 4.1. Морской флот цивилизаций (WorldBox Boats: рыбацкие, торговые и десантные корабли)
-	var boat_tex: ImageTexture = _sprites.get("boat_ship")
+	# 4.1. Морской флот цивилизаций (8-направленный Pixel-Art + CanvasTexture 2D Normal/Specular: kardashev_barge)
+	var barge_sheet: Texture2D = _load_wb_canvas_tex(
+		"res://assets/generated/kardashev_barge/sprites_2d/kardashev_barge_2d_spritesheet_pixelart_64x64.png",
+		"res://assets/generated/kardashev_barge/sprites_2d/kardashev_barge_2d_spritesheet_normal_64x64.png",
+		"res://assets/generated/kardashev_barge/sprites_2d/kardashev_barge_2d_spritesheet_specular_64x64.png"
+	)
+	var wb_boat_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/map/boat_human.png")
+	var boat_tex: ImageTexture = wb_boat_tex if wb_boat_tex != null else _sprites.get("boat_ship")
 	for b in sim.boats:
 		var bp: Vector2 = b["pos"]
 		var b_col: Color = b.get("color", Color.WHITE)
 		# Пенный кильватерный след на воде
 		var wake_w: float = 10.0 + sin(_anim_time * 6.0 + float(b.get("id", 0))) * 3.0
-		draw_rect(Rect2(bp.x - wake_w * 0.5, bp.y + 4.0, wake_w, 3.0), Color(0.75, 0.96, 1.0, 0.55), true)
-		if boat_tex != null:
-			draw_texture_rect(boat_tex, Rect2(bp.x - 10.0, bp.y - 10.0, 20.0, 16.0), false, Color.WHITE.lerp(b_col.lightened(0.25), 0.55))
+		draw_rect(Rect2(bp.x - wake_w * 0.5, bp.y + 5.0, wake_w, 3.0), Color(0.75, 0.96, 1.0, 0.55), true)
+		var b_tint: Color = Color.WHITE.lerp(b_col.lightened(0.30), 0.28)
+		if barge_sheet != null:
+			var b_move: Vector2 = (b.get("target_pos", bp) as Vector2) - bp
+			var b_dir_idx: int = 1
+			if b_move.length_squared() > 4.0:
+				var b_ang: float = fposmod(rad_to_deg(b_move.angle()), 360.0)
+				b_dir_idx = int(round(b_ang / 45.0)) % 8
+			draw_texture_rect_region(barge_sheet, Rect2(bp.x - 14.0, bp.y - 16.0, 28.0, 28.0), Rect2(float(b_dir_idx * 64), 0.0, 64.0, 64.0), b_tint)
+		elif boat_tex != null:
+			draw_texture_rect(boat_tex, Rect2(bp.x - 11.0, bp.y - 14.0, 22.0, 24.0), false, b_tint)
 		else:
 			draw_rect(Rect2(bp.x - 7.0, bp.y - 4.0, 14.0, 8.0), b_col, true)
 		if int(b.get("passengers", 0)) > 0:
@@ -1026,20 +1243,36 @@ func _draw_mode_planet_worldbox() -> void:
 			draw_rect(Rect2(a_pos.x - 3.0, a_pos.y - 19.0 + bob_y, 6.0, 6.0), Color(1.0, 0.88, 0.18), true)
 			draw_rect(Rect2(a_pos.x - 1.5, a_pos.y - 17.5 + bob_y, 3.0, 3.0), Color(1.0, 0.98, 0.75), true)
 
-		# 5.1. Отрисовка Меха-Колосса К-Титана (босс 2500 HP)
+		# 5.1. Отрисовка Меха-Колосса К-Титана (босс 2500 HP, исполинский 96×96 8-направленный Pixel-Art + CanvasTexture 2D Normal/Specular)
 		if bool(a.get("is_colossus", false)):
-			var col_tex: ImageTexture = _sprites.get("colossus_mech")
-			if col_tex != null:
-				draw_texture_rect(col_tex, Rect2(a_pos.x - 16.0, a_pos.y - 24.0 + bob_y, 32.0, 32.0), false)
+			var col_sheet: Texture2D = _load_wb_canvas_tex(
+				"res://assets/generated/ktitan_colossus/sprites_2d/ktitan_colossus_2d_spritesheet_pixelart_64x64.png",
+				"res://assets/generated/ktitan_colossus/sprites_2d/ktitan_colossus_2d_spritesheet_normal_64x64.png",
+				"res://assets/generated/ktitan_colossus/sprites_2d/ktitan_colossus_2d_spritesheet_specular_64x64.png"
+			)
+			# Тень под ногами исполина
+			_draw_pixel_filled_circle(a_pos + Vector2(0.0, 6.0), 26.0, Color(0.0, 0.0, 0.0, 0.42), 4.0)
+			if col_sheet != null:
+				var move_vec: Vector2 = (a.get("target_pos", a_pos) as Vector2) - a_pos
+				var dir_idx: int = 2
+				if move_vec.length_squared() > 4.0:
+					var ang_deg: float = fposmod(rad_to_deg(move_vec.angle()), 360.0)
+					dir_idx = int(round(ang_deg / 45.0)) % 8
+				var src_rect := Rect2(float(dir_idx * 64), 0.0, 64.0, 64.0)
+				draw_texture_rect_region(col_sheet, Rect2(a_pos.x - 48.0, a_pos.y - 76.0 + bob_y, 96.0, 96.0), src_rect)
+			else:
+				var col_tex: ImageTexture = _sprites.get("colossus_mech")
+				if col_tex != null:
+					draw_texture_rect(col_tex, Rect2(a_pos.x - 32.0, a_pos.y - 52.0 + bob_y, 64.0, 64.0), false)
 			var hp_ratio: float = clampf(float(a.get("hp", 2500.0)) / maxf(1.0, float(a.get("max_hp", 2500.0))), 0.0, 1.0)
-			draw_rect(Rect2(a_pos.x - 16.0, a_pos.y - 30.0, 32.0, 4.0), Color(0.05, 0.08, 0.12, 0.9), true)
-			draw_rect(Rect2(a_pos.x - 16.0, a_pos.y - 30.0, 32.0 * hp_ratio, 4.0), Color(0.18, 0.95, 1.0), true)
+			var hp_y: float = a_pos.y - 66.0 + bob_y
+			draw_rect(Rect2(a_pos.x - 23.0, hp_y - 1.0, 46.0, 5.0), Color(0.04, 0.06, 0.10, 0.94), true)
+			draw_rect(Rect2(a_pos.x - 22.0, hp_y, 44.0 * hp_ratio, 3.0), Color(0.18, 0.95, 1.0), true)
 
 		# 5.2. Индикатор прямого управления юнитом (WorldBox ControlledUnit / Crabzilla Mode)
 		if int(a.get("id", -1)) == sim.controlled_actor_id:
-			var ring_r: float = 14.0 + sin(_anim_time * 8.0) * 2.5
-			_draw_pixel_circle_outline(a_pos, ring_r, Color(0.18, 1.0, 0.88, 0.95), 2.0)
-			draw_rect(Rect2(a_pos.x - 24.0, a_pos.y - 38.0, 48.0, 11.0), Color(0.03, 0.08, 0.14, 0.88), true)
+			var ring_r: float = (30.0 if bool(a.get("is_colossus", false)) else 14.0) + sin(_anim_time * 8.0) * 2.5
+			_draw_pixel_circle_outline(a_pos + Vector2(0.0, 4.0), ring_r, Color(0.18, 1.0, 0.88, 0.95), 2.0)
 
 		# 5.3. Значки активных статусных эффектов и облачка диалогов (WorldBox Speech Bubbles) над юнитом
 		if float(a.get("chat_timer", 0.0)) > 0.0:
@@ -1164,25 +1397,35 @@ func _draw_mode_planet_worldbox() -> void:
 					var car_p: Vector2 = pos_a.lerp(pos_b, car_t)
 					draw_rect(Rect2(car_p.x - 3.0, car_p.y - 3.0, 6.0, 6.0), Color(1.0, 0.95, 0.45), true)
 
-	# 7.1. Неперекрывающиеся таблички-баннеры городов со значком войны ⚔ (WorldBox City Banner Layout)
+	# 7.1. Неперекрывающиеся таблички-баннеры городов с текстурами nameplate_city / nameplate_city_capital из WorldBox v0.51.2
 	if show_city_banners:
 		var banner_rects: Dictionary = compute_non_overlapping_city_banner_rects()
+		var np_city_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/map/nameplate_city.png")
+		var np_cap_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/map/nameplate_city_capital.png")
 		for c_id in sim.cities_map.keys():
 			var city: Dictionary = sim.cities_map[c_id]
 			var c_pos: Vector2 = city["map_pos"]
 			var c_col: Color = city["color"]
+			var is_cap: bool = bool(city.get("is_capital", false))
 			var banner_rect: Rect2 = banner_rects.get(c_id, Rect2(c_pos.x - 68.0, c_pos.y - 32.0, 136.0, 16.0))
 			var b_center: Vector2 = banner_rect.get_center()
 			if b_center.distance_to(c_pos + Vector2(0.0, -24.0)) > 18.0:
-				draw_line(Vector2(b_center.x, banner_rect.end.y), c_pos, Color(c_col.r, c_col.g, c_col.b, 0.55), 1.2)
-			draw_rect(banner_rect, Color(0.06, 0.08, 0.12, 0.82), true)
-			var border_col: Color = Color(1.0, 0.32, 0.32) if cities_in_war.has(c_id) else c_col
+				draw_line(Vector2(b_center.x, banner_rect.end.y), c_pos, Color(c_col.r, c_col.g, c_col.b, 0.62), 1.4)
+			# Оригинальная текстура плашки WorldBox (nameplate_city_capital / nameplate_city) + герб фракции
+			draw_rect(Rect2(banner_rect.position + Vector2(2.0, 2.0), banner_rect.size), Color(0.0, 0.0, 0.0, 0.55), true)
+			var np_tex: ImageTexture = np_cap_tex if is_cap else np_city_tex
+			if np_tex != null:
+				draw_texture_rect(np_tex, banner_rect.grow_individual(2.0, 2.0, 2.0, 2.0), false, Color(0.95, 0.96, 1.0, 0.94))
+			else:
+				draw_rect(banner_rect, Color(0.03, 0.05, 0.10, 0.90), true)
+			var border_col: Color = Color(1.0, 0.32, 0.32) if cities_in_war.has(c_id) else c_col.lightened(0.18)
+			draw_rect(Rect2(banner_rect.position.x + 2.0, banner_rect.position.y + 2.0, 5.0, banner_rect.size.y - 4.0), border_col, true)
 			draw_rect(banner_rect, border_col, false, 1.2)
 			if font != null:
-				var is_cap: bool = bool(city.get("is_capital", false))
 				var war_prefix: String = "⚔ " if cities_in_war.has(c_id) else ("👑 " if is_cap else "★ ")
 				var label_txt: String = "%s%s [%d]" % [war_prefix, city["name"], int(city["population"])]
-				draw_string(font, Vector2(banner_rect.position.x + 4.0, banner_rect.position.y + 12.0), label_txt, HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 8.0, 10, c_col.lightened(0.38))
+				draw_string(font, Vector2(banner_rect.position.x + 9.0, banner_rect.position.y + 13.0), label_txt + "", HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 12.0, 10, Color(0.0, 0.0, 0.0, 0.85))
+				draw_string(font, Vector2(banner_rect.position.x + 8.0, banner_rect.position.y + 12.0), label_txt, HORIZONTAL_ALIGNMENT_CENTER, banner_rect.size.x - 12.0, 10, c_col.lightened(0.52))
 
 	# 7.2. Активные 2D ударные волны катаклизмов
 	for sw in _active_shockwaves:
@@ -1198,11 +1441,18 @@ func _draw_mode_planet_worldbox() -> void:
 		if sw_ratio > 0.75:
 			_draw_pixel_filled_circle(sw_p, sw_r * 0.45, Color(sw_c.r, sw_c.g, sw_c.b, 0.45 * sw_ratio))
 
-	# 8. Взлетающие пиксельные ракеты и частицы взрывов
+	# 8. Взлетающие ракеты Роя Дайсона (8-направленный Pixel-Art + CanvasTexture 2D Normal/Specular: dyson_carrier_rocket) и частицы взрывов
+	var rocket_sheet: Texture2D = _load_wb_canvas_tex(
+		"res://assets/generated/dyson_carrier_rocket/sprites_2d/dyson_carrier_rocket_2d_spritesheet_pixelart_64x64.png",
+		"res://assets/generated/dyson_carrier_rocket/sprites_2d/dyson_carrier_rocket_2d_spritesheet_normal_64x64.png",
+		"res://assets/generated/dyson_carrier_rocket/sprites_2d/dyson_carrier_rocket_2d_spritesheet_specular_64x64.png"
+	)
 	var rocket_tex: ImageTexture = _sprites.get("rocket_ship")
 	for r in _active_rockets:
 		var rp: Vector2 = r["pos"]
-		if rocket_tex != null:
+		if rocket_sheet != null:
+			draw_texture_rect_region(rocket_sheet, Rect2(rp.x - 14.0, rp.y - 16.0, 28.0, 28.0), Rect2(64.0, 0.0, 64.0, 64.0))
+		elif rocket_tex != null:
 			draw_texture_rect(rocket_tex, Rect2(rp.x - 9.0, rp.y - 12.0, 18.0, 24.0), false)
 
 	for p in _particles:
@@ -1347,16 +1597,20 @@ func _draw_mode_star_dyson_2d() -> void:
 
 	if font != null:
 		var stage_name: String = sim.get_dyson_stage_name() if sim.has_method("get_dyson_stage_name") else "Этап %d" % dyson_stage
+		var hud_pill := Rect2(370.0, 86.0, 1160.0, 34.0)
+		draw_rect(Rect2(hud_pill.position + Vector2(2.0, 3.0), hud_pill.size), Color(0.0, 0.0, 0.0, 0.55), true)
+		draw_rect(hud_pill, Color(0.03, 0.05, 0.11, 0.88), true)
+		draw_rect(hud_pill, Color(1.0, 0.82, 0.35, 0.78), false, 1.5)
 		draw_string(
 			font,
-			Vector2(390.0, 115.0),
-			"2D АСТРОИНЖЕНЕРИЯ: %s — Этап %d: %s | Сегментов: %d/60 | Затмение: %.0f%% | Парусов: %d" % [
+			Vector2(390.0, 109.0),
+			"☀ 2D АСТРОИНЖЕНЕРИЯ: %s — Этап %d: %s | Сегментов: %d/60 | Затмение: %.0f%% | Парусов: %d" % [
 				sim.star_name, dyson_stage, stage_name, dyson_active_segments, eclipse_ratio * 100.0, sim.total_dyson_sails
 			],
 			HORIZONTAL_ALIGNMENT_CENTER,
 			1120.0,
 			15,
-			Color(1.0, 0.88, 0.42)
+			Color(1.0, 0.90, 0.48)
 		)
 
 
@@ -1396,7 +1650,10 @@ func _draw_mode_system_overview_2d() -> void:
 	_draw_pixel_filled_circle(planet_pos + Vector2(7.0, 5.0), 9.0, Color(0.72, 0.32, 0.92))
 	_draw_pixel_circle_outline(planet_pos, 30.0, Color(0.35, 0.88, 1.0, 0.75), 2.0)
 	if font != null:
-		draw_string(font, planet_pos + Vector2(-55.0, 44.0), "Планета (%d полисов)" % sim.cities_map.size(), HORIZONTAL_ALIGNMENT_LEFT, 140.0, 12, Color(0.45, 0.95, 1.0))
+		var pl_pill := Rect2(planet_pos.x - 74.0, planet_pos.y + 34.0, 148.0, 20.0)
+		draw_rect(pl_pill, Color(0.03, 0.06, 0.12, 0.86), true)
+		draw_rect(pl_pill, Color(0.35, 0.85, 1.0, 0.72), false, 1.0)
+		draw_string(font, Vector2(pl_pill.position.x + 4.0, pl_pill.position.y + 14.0), "Планета (%d полисов)" % sim.cities_map.size(), HORIZONTAL_ALIGNMENT_CENTER, 140.0, 11, Color(0.55, 0.96, 1.0))
 
 	# 4. Пиксельный Пояс Астероидов и добывающие корабли-дроны
 	var ast_tex: ImageTexture = _sprites.get("asteroid_chunk")
@@ -1408,7 +1665,12 @@ func _draw_mode_system_overview_2d() -> void:
 			var sz: float = float(ast["size"])
 			draw_texture_rect(ast_tex, Rect2(ax - sz * 0.5, ay - sz * 0.5, sz, sz), false)
 
-	# 5. Автономные флотилии дронов, курсирующие между Планетой, Поясом Астероидов и Сферой Дайсона
+	# 5. Автономные флотилии дронов (8-направленный Pixel-Art + CanvasTexture 2D Normal/Specular: orbital_harvester_drone)
+	var drone_sheet: Texture2D = _load_wb_canvas_tex(
+		"res://assets/generated/orbital_harvester_drone/sprites_2d/orbital_harvester_drone_2d_spritesheet_pixelart_64x64.png",
+		"res://assets/generated/orbital_harvester_drone/sprites_2d/orbital_harvester_drone_2d_spritesheet_normal_64x64.png",
+		"res://assets/generated/orbital_harvester_drone/sprites_2d/orbital_harvester_drone_2d_spritesheet_specular_64x64.png"
+	)
 	var rocket_tex: ImageTexture = _sprites.get("rocket_ship")
 	var fleet_count: int = clampi(sim.cities_map.size() * 6 + int(sim.total_dyson_sails / 25), 8, 36)
 	for f in range(fleet_count):
@@ -1419,20 +1681,29 @@ func _draw_mode_system_overview_2d() -> void:
 		if t_cycle > 0.42 and t_cycle < 0.58:
 			# Пиксельный лазер бурения астероида
 			draw_line(drone_pos, ast_pos, Color(0.25, 1.0, 0.75, 0.85), 2.0)
-		if rocket_tex != null:
+		if drone_sheet != null:
+			var flight_vec: Vector2 = (ast_pos - planet_pos) if cos(t_cycle * PI) >= 0.0 else (planet_pos - ast_pos)
+			var d_ang: float = fposmod(rad_to_deg(flight_vec.angle()), 360.0)
+			var d_dir_idx: int = int(round(d_ang / 45.0)) % 8
+			draw_texture_rect_region(drone_sheet, Rect2(drone_pos.x - 12.0, drone_pos.y - 12.0, 24.0, 24.0), Rect2(float(d_dir_idx * 64), 0.0, 64.0, 64.0))
+		elif rocket_tex != null:
 			draw_texture_rect(rocket_tex, Rect2(drone_pos.x - 7.0, drone_pos.y - 7.0, 14.0, 14.0), false)
 
 	if font != null:
+		var sys_pill := Rect2(470.0, 86.0, 960.0, 34.0)
+		draw_rect(Rect2(sys_pill.position + Vector2(2.0, 3.0), sys_pill.size), Color(0.0, 0.0, 0.0, 0.55), true)
+		draw_rect(sys_pill, Color(0.03, 0.05, 0.11, 0.88), true)
+		draw_rect(sys_pill, Color(0.35, 0.85, 1.0, 0.78), false, 1.5)
 		draw_string(
 			font,
-			Vector2(490.0, 110.0),
-			"2D КАРТА СИСТЕМЫ: Масса Пояса Астероидов: %.0f ед. | Автономных флотилий Роя: %d" % [
+			Vector2(490.0, 109.0),
+			"🪐 2D КАРТА СИСТЕМЫ: Масса Пояса Астероидов: %.0f ед. | Автономных флотилий Роя: %d" % [
 				sim.asteroid_belt_mass, fleet_count
 			],
 			HORIZONTAL_ALIGNMENT_CENTER,
 			920.0,
 			15,
-			Color(0.55, 0.92, 1.0)
+			Color(0.55, 0.94, 1.0)
 		)
 
 
@@ -1494,6 +1765,13 @@ func _draw_pixel_ellipse_outline(center: Vector2, rx: float, ry: float, col: Col
 
 
 func _draw_pixel_starfield() -> void:
+	# Многослойные пиксельные туманности глубокого космоса
+	_draw_pixel_filled_circle(Vector2(340.0, 290.0), 170.0, Color(0.08, 0.20, 0.38, 0.14), 12.0)
+	_draw_pixel_filled_circle(Vector2(390.0, 310.0), 105.0, Color(0.14, 0.35, 0.58, 0.12), 12.0)
+	_draw_pixel_filled_circle(Vector2(1540.0, 690.0), 190.0, Color(0.22, 0.10, 0.36, 0.14), 12.0)
+	_draw_pixel_filled_circle(Vector2(1490.0, 660.0), 115.0, Color(0.38, 0.16, 0.52, 0.11), 12.0)
+	_draw_pixel_filled_circle(Vector2(950.0, 495.0), 260.0, Color(0.28, 0.20, 0.08, 0.08), 16.0)
+
 	for st in _space_stars:
 		var pos: Vector2 = st["pos"]
 		var sz: float = float(st["size"])

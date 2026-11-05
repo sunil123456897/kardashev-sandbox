@@ -97,6 +97,9 @@ func _init() -> void:
 	_assert(renderer._mm_flora.material is ShaderMaterial, "_mm_flora must use worldbox_multimesh.gdshader")
 	_assert(renderer._mm_buildings.material is ShaderMaterial, "_mm_buildings must use worldbox_multimesh.gdshader")
 	_assert(renderer._mm_actors.material is ShaderMaterial, "_mm_actors must use worldbox_multimesh.gdshader")
+	_assert(renderer._mm_buildings.texture is CanvasTexture and (renderer._mm_buildings.texture as CanvasTexture).normal_texture != null, "_mm_buildings must bind CanvasTexture with 2D normal_texture & specular_texture")
+	_assert(renderer._mm_flora.texture is CanvasTexture and (renderer._mm_flora.texture as CanvasTexture).normal_texture != null, "_mm_flora must bind CanvasTexture with 2D normal_texture & specular_texture")
+	_assert(renderer.active_point_light_count >= 2, "CosmicRenderer must activate dynamic PointLight2D nodes for bonfires/relics/colossus")
 
 	_assert(renderer._atlas_flora_tex != null and renderer._atlas_flora_tex.get_width() == 100, "Flora strip atlas must be 100x10 (10 sprites)")
 	_assert(renderer._atlas_building_tex != null and renderer._atlas_building_tex.get_width() == 96, "Building strip atlas must be 96x12 (8 sprites)")
