@@ -79,7 +79,7 @@ func _process(delta: float) -> void:
 		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 			move_dir.x += 1.0
 		var is_firing: bool = Input.is_key_pressed(KEY_SPACE)
-		sim.step_controlled_actor(move_dir, delta, is_firing)
+		sim.step_controlled_actor(move_dir, delta, is_firing, _hovered_world_pos)
 
 	if _is_painting_power and camera.view_mode == SandboxOrbitCameraScript.ViewMode.MODE_PLANET and hud.selected_power_id != "":
 		if hud.selected_power_id == "power_divine_magnet":
@@ -150,13 +150,32 @@ func _unhandled_input(event: InputEvent) -> void:
 						_paint_cooldown = 0.15
 						sim.apply_god_power_at_pos(_hovered_world_pos, hud.selected_power_id, hud.current_brush_radius)
 					else:
-						# В режиме Наблюдения проверяем, есть ли под курсором живой юнит для захвата Магнитом
-						var actor: Dictionary = sim.find_closest_actor(_hovered_world_pos, 36.0)
-						if not actor.is_empty():
-							_dragged_actor = actor
-							_dragged_actor["thought"] = "Переносится рукой Бога!"
+						# В режиме Наблюдения проверяем клик по всплывающему Маркеру События на карте или захват юнита
+						var clicked_marker: Dictionary = sim.get_clicked_map_event_marker(_hovered_world_pos, 54.0) if sim.has_method("get_clicked_map_event_marker") else {}
+						if not clicked_marker.is_empty():
+							camera.pan_to(clicked_marker.get("pos", _hovered_world_pos))
+							if audio != null:
+								audio.play_ui_sfx("ui_click")
 						else:
-							_is_pan_dragging = true
+							var actor: Dictionary = sim.find_closest_actor(_hovered_world_pos, 36.0)
+							if not actor.is_empty():
+								_dragged_actor = actor
+								_dragged_actor["thought"] = "Переносится рукой Бога!"
+								if hud != null and hud.has_method("open_actor_inspector"):
+									hud.open_actor_inspector(int(actor["id"]))
+							else:
+								var clicked_cid: int = -1
+								var best_cd: float = 48.0
+								for cid in sim.cities_map.keys():
+									var c_pos: Vector2 = sim.cities_map[cid].get("map_pos", Vector2.ZERO)
+									var d_c: float = c_pos.distance_to(_hovered_world_pos)
+									if d_c <= best_cd:
+										best_cd = d_c
+										clicked_cid = int(cid)
+								if clicked_cid != -1 and hud != null and hud.has_method("open_city_inspector"):
+									hud.open_city_inspector(clicked_cid)
+								else:
+									_is_pan_dragging = true
 				else:
 					_is_pan_dragging = true
 			else:

@@ -52,6 +52,11 @@ $CoreSuites = @(
     "tests/test_worldbox_complete_parity.gd",
     "tests/test_worldbox_supreme_blocks_abcd.gd",
     "tests/test_worldbox_authentic_pacing_and_visuals.gd",
+    "tests/test_stage1_era_evolution.gd",
+    "tests/test_stage2_naval_siege_warfare.gd",
+    "tests/test_stage3_4_filter_and_god_feel.gd",
+    "tests/test_worldbox_audit_fixes.gd",
+    "tests/test_worldbox_visual_ui_parity.gd",
     "tests/test_sandbox_suite.gd"
 )
 

@@ -101,92 +101,56 @@ func _load_wb_tex(res_path: String) -> ImageTexture:
 	return null
 
 
+const POWER_WB_ICON_MAP := {
+	"power_cryo_comet": "iconAgeIce.png",
+	"power_primordial_rain": "iconTileDeepOcean.png",
+	"power_solar_plasma": "iconSeedInfernal.png",
+	"power_actinide_meteor": "iconAtomicBomb.png",
+	"power_crystal_lattice": "iconSeedCrystal.png",
+	"power_cyber_nanites": "iconCybercore.png",
+	"power_seed_carbon": "iconHumans.png",
+	"power_seed_silicon": "iconResGems.png",
+	"power_seed_plasma": "iconDragon.png",
+	"power_seed_cyber": "iconAlien.png",
+	"power_monolith_uplift": "iconMonolith.png",
+	"power_omega_mutation": "iconInspiration.png",
+	"power_lens_time_accel": "iconClockXSonic.png",
+	"power_lens_zero_grav": "iconPowerup.png",
+	"power_lens_singularity": "iconAgeWonders.png",
+	"power_lens_shield": "iconShield.png",
+	"power_dyson_ring": "iconAgeSun.png",
+	"power_harvest_asteroids": "iconUfo.png",
+	"power_stellar_stabilizer": "iconAgeHope.png",
+	"power_chrono_supernova": "iconHeatRay.png",
+	"power_meteor_strike": "iconMeteorite.png",
+	"power_antimatter_lance": "iconAntimatterBomb.png",
+	"power_solar_flare": "iconLightning.png",
+	"power_seismic_quake": "iconTileHills.png",
+	"power_cosmic_plague": "iconPlague.png",
+	"power_gaia_bloom": "iconSeedGrass.png",
+	"power_mutagenic_spore": "iconMushSpores.png",
+	"power_matter_transmuter": "iconMythril.png",
+	"power_zero_point_well": "iconAdamantine.png",
+	"power_raise_land": "iconShovelPlus.png",
+	"power_lower_water": "iconShovelMinus.png",
+	"power_vortex_sand": "iconTileSand.png",
+	"power_living_rain": "iconRain.png",
+	"power_fire_spark": "iconFire.png",
+	"power_spawn_fauna": "iconSeedEnchanted.png",
+	"power_bless_unit": "iconBlessing.png",
+	"power_whisper_of_war": "iconWhisperOfWar.png",
+	"power_inspire_rebellion": "iconTumor.png",
+	"power_divine_magnet": "iconMagnet.png",
+	"power_spawn_colossus": "iconCrabzilla.png",
+	"power_spawn_tornado": "iconTornado.png",
+	"power_earthquake_fault": "iconEarthquake.png",
+	"power_xeno_plague": "iconBiomass.png",
+	"power_spawn_cloud": "iconAcid.png"
+}
+
+
 func _get_power_wb_icon(pid: String) -> ImageTexture:
-	var icon_file := "iconSpark.png"
-	if pid.find("comet") != -1 or pid.find("rain") != -1:
-		icon_file = "iconRain.png"
-	elif pid.find("volcano") != -1 or pid.find("earthquake") != -1:
-		icon_file = "iconEarthquake.png"
-	elif pid.find("raise") != -1:
-		icon_file = "iconShovelPlus.png"
-	elif pid.find("lower") != -1:
-		icon_file = "iconShovelMinus.png"
-	elif pid.find("vortex") != -1 or pid.find("tornado") != -1:
-		icon_file = "iconTornado.png"
-	elif pid.find("monolith") != -1:
-		icon_file = "iconMonolith.png"
-	elif pid.find("storm") != -1 or pid.find("lightning") != -1:
-		icon_file = "iconLightning.png"
-	elif pid.find("spores") != -1 or pid.find("biomass") != -1:
-		icon_file = "iconBiomass.png"
-	elif pid.find("cyber") != -1:
-		icon_file = "iconCybercore.png"
-	elif pid.find("meteor") != -1:
-		icon_file = "iconMeteorite.png"
-	elif pid.find("savanna") != -1:
-		icon_file = "iconSeedSavanna.png"
-	elif pid.find("enchanted") != -1:
-		icon_file = "iconSeedEnchanted.png"
-	elif pid.find("corrupted") != -1:
-		icon_file = "iconSeedCorrupted.png"
-	elif pid.find("infernal") != -1:
-		icon_file = "iconSeedInfernal.png"
-	elif pid.find("crystal") != -1:
-		icon_file = "iconSeedCrystal.png"
-	elif pid.find("bloom") != -1 or pid.find("grass") != -1:
-		icon_file = "iconSeedGrass.png"
-	elif pid.find("stone") != -1:
-		icon_file = "iconStone.png"
-	elif pid.find("gold") != -1 and pid.find("age") == -1:
-		icon_file = "iconGold.png"
-	elif pid.find("gems") != -1:
-		icon_file = "iconResGems.png"
-	elif pid.find("abiogenesis") != -1 or pid.find("human") != -1:
-		icon_file = "iconHumans.png"
-	elif pid.find("mutagen") != -1 or pid.find("plague") != -1:
-		icon_file = "iconPlague.png"
-	elif pid.find("uplift") != -1 or pid.find("inspiration") != -1 or pid.find("eureka") != -1:
-		icon_file = "iconInspiration.png"
-	elif pid.find("golden_age") != -1 or pid.find("blessing") != -1:
-		icon_file = "iconBlessing.png"
-	elif pid.find("coffee") != -1:
-		icon_file = "iconCoffee.png"
-	elif pid.find("powerup") != -1:
-		icon_file = "iconPowerup.png"
-	elif pid.find("schism") != -1 or pid.find("war") != -1:
-		icon_file = "iconWhisperOfWar.png"
-	elif pid.find("colossus") != -1 or pid.find("crabzilla") != -1:
-		icon_file = "iconCrabzilla.png"
-	elif pid.find("dragon") != -1:
-		icon_file = "iconDragon.png"
-	elif pid.find("ufo") != -1:
-		icon_file = "iconUfo.png"
-	elif pid.find("alien") != -1:
-		icon_file = "iconAlien.png"
-	elif pid.find("time") != -1 or pid.find("chrono") != -1:
-		icon_file = "iconClockXSonic.png"
-	elif pid.find("grav") != -1 or pid.find("magnet") != -1:
-		icon_file = "iconMagnet.png"
-	elif pid.find("shield") != -1 or pid.find("entropy") != -1:
-		icon_file = "iconShield.png"
-	elif pid.find("quantum") != -1:
-		icon_file = "iconAgeWonders.png"
-	elif pid.find("solar") != -1 or pid.find("sails") != -1:
-		icon_file = "iconAgeSun.png"
-	elif pid.find("stellar") != -1 or pid.find("stabilizer") != -1:
-		icon_file = "iconAgeHope.png"
-	elif pid.find("antimatter") != -1 or pid.find("tsar") != -1:
-		icon_file = "iconAntimatterBomb.png"
-	elif pid.find("atomic") != -1:
-		icon_file = "iconAtomicBomb.png"
-	elif pid.find("supernova") != -1 or pid.find("heat_ray") != -1:
-		icon_file = "iconHeatRay.png"
-	elif pid.find("napalm") != -1 or pid.find("fire") != -1:
-		icon_file = "iconFire.png"
-	elif pid.find("acid") != -1:
-		icon_file = "iconAcid.png"
-	else:
-		icon_file = "iconKnowledge.png"
+	var icon_file: String = POWER_WB_ICON_MAP.get(pid, "iconSpark.png")
 	return _load_wb_tex("res://assets/worldbox/icons/" + icon_file)
 
 
@@ -223,11 +187,13 @@ func _process(_delta: float) -> void:
 
 
 func _make_panel_style(bg_col: Color, border_col: Color, corner_r: int = 8) -> StyleBox:
-	var win_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/ui/windowBigNoTitle.png") if corner_r >= 10 else _load_wb_tex("res://assets/worldbox/ui/windowInnerSliced.png")
+	var win_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/ui/windowFrameClean.png") if corner_r >= 10 else _load_wb_tex("res://assets/worldbox/ui/windowInnerSliced.png")
+	if win_tex == null and corner_r >= 10:
+		win_tex = _load_wb_tex("res://assets/worldbox/ui/windowBigNoTitle.png")
 	if win_tex != null:
 		var sbt := StyleBoxTexture.new()
 		sbt.texture = win_tex
-		var m_margin: float = 16.0 if corner_r >= 10 else 8.0
+		var m_margin: float = 14.0 if corner_r >= 10 else 8.0
 		sbt.texture_margin_left = m_margin
 		sbt.texture_margin_right = m_margin
 		sbt.texture_margin_top = m_margin
@@ -1075,6 +1041,11 @@ func _populate_world_modal() -> void:
 		ab.text = ("★ " if is_cur_age else "") + wa.title
 		ab.add_theme_font_size_override("font_size", 12)
 		var age_ic_map := {
+			"age_of_hope": "iconAgeHope.png",
+			"age_of_sun": "iconAgeSun.png",
+			"age_of_ice": "iconAgeIce.png",
+			"age_of_ash": "iconAgeChaos.png",
+			"age_of_wonders": "iconAgeWonders.png",
 			"age_hope": "iconAgeHope.png",
 			"age_sun": "iconAgeSun.png",
 			"age_ice": "iconAgeIce.png",
@@ -1134,12 +1105,65 @@ func _populate_world_modal() -> void:
 
 	# 3. Переключатели Слоёв Карты (Map Overlays)
 	var layer_sec := Label.new()
-	layer_sec.text = "3. СЛОИ ОТОБРАЖЕНИЯ КАРТЫ (WORLDBOX OVERLAYS)"
+	layer_sec.text = "3. СЛОИ ОТОБРАЖЕНИЯ КАРТЫ И ПОЛИТИЧЕСКИЕ РЕЖИМЫ (WORLDBOX OVERLAYS)"
 	layer_sec.add_theme_font_size_override("font_size", 13)
 	layer_sec.add_theme_color_override("font_color", Color(0.45, 0.95, 0.72))
 	_vbox_world_content.add_child(layer_sec)
 
 	var rend := _get_cosmic_renderer()
+	var cur_ov_mode: int = int(rend.get("map_overlay_mode")) if (rend != null and rend.get("map_overlay_mode") != null) else 0
+	var ov_hb := HFlowContainer.new()
+	ov_hb.add_theme_constant_override("h_separation", 8)
+	ov_hb.add_theme_constant_override("v_separation", 8)
+	_vbox_world_content.add_child(ov_hb)
+	var ov_modes := [
+		{"mode": 0, "title": "🏙 Полисы"},
+		{"mode": 1, "title": "👑 Империи"},
+		{"mode": 2, "title": "🏛 Культуры"},
+		{"mode": 3, "title": "🛐 Религии"},
+		{"mode": 4, "title": "🗣 Языки"}
+	]
+	for om in ov_modes:
+		var m_idx: int = int(om["mode"])
+		var is_act_ov: bool = (m_idx == cur_ov_mode)
+		var ob := Button.new()
+		ob.text = ("✓ " if is_act_ov else "") + str(om["title"])
+		ob.add_theme_font_size_override("font_size", 12)
+		var ob_bg := Color(0.12, 0.34, 0.48, 0.96) if is_act_ov else Color(0.07, 0.13, 0.22, 0.92)
+		var ob_brd := Color(0.42, 0.95, 1.0, 1.0) if is_act_ov else Color(0.25, 0.56, 0.82, 0.75)
+		_apply_btn_theme(ob, ob_bg, ob_brd, Color(0.95, 1.0, 1.0))
+		ob.pressed.connect(func() -> void:
+			var r := _get_cosmic_renderer()
+			if r != null and r.has_method("set_map_overlay_mode"):
+				r.set_map_overlay_mode(m_idx)
+			_populate_world_modal()
+		)
+		ov_hb.add_child(ob)
+
+	var crisis_hb := HBoxContainer.new()
+	crisis_hb.add_theme_constant_override("separation", 8)
+	_vbox_world_content.add_child(crisis_hb)
+	var btn_filter := Button.new()
+	btn_filter.text = "☠ Запустить Великий Фильтр (Босс Архонт-Омега)"
+	btn_filter.add_theme_font_size_override("font_size", 12)
+	_apply_btn_theme(btn_filter, Color(0.32, 0.08, 0.14, 0.95), Color(1.0, 0.25, 0.36, 0.95), Color(1.0, 0.90, 0.92))
+	btn_filter.pressed.connect(func() -> void:
+		sim.trigger_great_filter_crisis()
+		_populate_world_modal()
+	)
+	crisis_hb.add_child(btn_filter)
+
+	var btn_eclipse := Button.new()
+	btn_eclipse.text = "❄ Затмение Сферой Дайсона (Остывание)"
+	btn_eclipse.add_theme_font_size_override("font_size", 12)
+	_apply_btn_theme(btn_eclipse, Color(0.08, 0.22, 0.34, 0.95), Color(0.38, 0.88, 1.0, 0.95), Color(0.90, 0.98, 1.0))
+	btn_eclipse.pressed.connect(func() -> void:
+		sim.dyson_stage = maxi(3, sim.dyson_stage)
+		sim.total_dyson_sails = maxi(240, sim.total_dyson_sails)
+		sim.apply_dyson_eclipse_cooling_step(1.0, 48)
+		_populate_world_modal()
+	)
+	crisis_hb.add_child(btn_eclipse)
 	var cb_banners := CheckButton.new()
 	cb_banners.text = "Показывать таблички-баннеры полисов (без наложений)"
 	cb_banners.button_pressed = bool(rend.get("show_city_banners")) if rend != null else true
@@ -1215,6 +1239,30 @@ func _populate_world_modal() -> void:
 			_populate_world_modal()
 		)
 		s_hb.add_child(btn_load)
+
+	_vbox_world_content.add_child(HSeparator.new())
+
+	# 5. Глобальные Реестры Мира (Избранные, Империи, Религии, Книги, Подвиды)
+	var reg_sec := Label.new()
+	reg_sec.text = "5. ГЛОБАЛЬНЫЕ РЕЕСТРЫ МИРА (ИМПЕРИИ, ИЗБРАННЫЕ, РЕЛИГИИ, КНИГИ, ПОДВИДЫ)"
+	reg_sec.add_theme_font_size_override("font_size", 13)
+	reg_sec.add_theme_color_override("font_color", Color(1.0, 0.86, 0.38))
+	_vbox_world_content.add_child(reg_sec)
+
+	var fav_names: Array[String] = []
+	for a in sim.actors:
+		if bool(a.get("is_favorite", false)):
+			fav_names.append("%s (%s)" % [a.get("name", ""), a.get("role", "")])
+	var reg_lbl := Label.new()
+	reg_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	reg_lbl.text = (
+		"• 👑 Империй: %d | 🛐 Религий: %d | 🗣 Языков: %d | 📖 Книг: %d | 🧬 Подвидов: %d\n" % [
+			sim.kingdoms_map.size(), sim.religions_map.size(), sim.languages_map.size(), sim.books_list.size(), sim.subspecies_map.size()
+		] +
+		"• ★ Избранные герои (%d): %s" % [fav_names.size(), ", ".join(fav_names) if not fav_names.is_empty() else "нет"]
+	)
+	reg_lbl.add_theme_color_override("font_color", Color(0.86, 0.94, 1.0))
+	_vbox_world_content.add_child(reg_lbl)
 
 
 func set_event_filter(filter_cat: String) -> void:
@@ -1341,14 +1389,48 @@ func _populate_city_inspector(city_id: int) -> void:
 	var c_col: Color = c_data.get("color", Color.WHITE)
 
 	var top_hb := HBoxContainer.new()
+	top_hb.add_theme_constant_override("separation", 10)
 	_vbox_city_content.add_child(top_hb)
 
+	var c_era: int = int(c_data.get("era", 1))
+	var bld_atlas_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_buildings_wb.png")
+	if bld_atlas_tex != null:
+		var city_port := TextureRect.new()
+		var at_b := AtlasTexture.new()
+		at_b.atlas = bld_atlas_tex
+		at_b.region = Rect2(0.0 if c_era == 1 else (384.0 if c_era == 2 else 448.0), 0.0, 64.0, 64.0)
+		city_port.texture = at_b
+		city_port.custom_minimum_size = Vector2(44, 44)
+		city_port.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		city_port.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		city_port.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		top_hb.add_child(city_port)
+
+	var has_dome: bool = bool(sim.cities_map[city_id].get("shielded", false)) or bool(sim.cities_map[city_id].get("thermal_dome_active", false))
 	var title_l := Label.new()
-	title_l.text = "🏙 %s [K-%.2f] — %s" % [c_data.get("name", "Полис"), float(c_data.get("kardashev_level", 0.0)), c_data.get("subspecies_name", "")]
+	title_l.text = "🏙 %s [Эра %d | K-%.2f]%s — %s" % [
+		c_data.get("name", "Полис"), c_era, float(c_data.get("kardashev_level", 0.0)),
+		" 🛡[Купол]" if has_dome else "", c_data.get("subspecies_name", "")
+	]
 	title_l.add_theme_font_size_override("font_size", 16)
 	title_l.add_theme_color_override("font_color", c_col.lightened(0.35))
 	title_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_hb.add_child(title_l)
+
+	for target_era in [1, 2, 3]:
+		var b_era := Button.new()
+		b_era.text = "Эра %s" % ("I" if target_era == 1 else ("II" if target_era == 2 else "III"))
+		b_era.add_theme_font_size_override("font_size", 11)
+		var is_cur_e: bool = (c_era == target_era)
+		var e_bg := Color(0.14, 0.34, 0.48, 0.96) if is_cur_e else Color(0.08, 0.14, 0.24, 0.90)
+		var e_brd := Color(0.38, 0.95, 1.0, 1.0) if is_cur_e else Color(0.28, 0.56, 0.82, 0.75)
+		_apply_btn_theme(b_era, e_bg, e_brd, Color(0.95, 1.0, 1.0))
+		var te_val: int = target_era
+		b_era.pressed.connect(func() -> void:
+			sim.advance_city_to_era(city_id, te_val)
+			_populate_city_inspector(city_id)
+		)
+		top_hb.add_child(b_era)
 
 	var btn_pan := Button.new()
 	btn_pan.text = "🎯 Найти на карте"
@@ -1450,6 +1532,20 @@ func _populate_city_inspector(city_id: int) -> void:
 	)
 	emp_hb.add_child(btn_boat)
 
+	var btn_invade := Button.new()
+	btn_invade.text = "⚔ Морской Десант"
+	btn_invade.add_theme_font_size_override("font_size", 12)
+	_apply_btn_theme(btn_invade, Color(0.30, 0.12, 0.10, 0.94), Color(1.0, 0.42, 0.28, 0.88), Color(1.0, 0.92, 0.86))
+	btn_invade.pressed.connect(func() -> void:
+		for other_cid in sim.cities_map.keys():
+			if int(other_cid) != city_id:
+				sim.set_diplomacy_status(city_id, int(other_cid), "WAR")
+				sim.launch_amphibious_invasion(city_id, int(other_cid))
+				break
+		_populate_city_inspector(city_id)
+	)
+	emp_hb.add_child(btn_invade)
+
 	var meta_hb := HBoxContainer.new()
 	meta_hb.add_theme_constant_override("separation", 8)
 	_vbox_city_content.add_child(meta_hb)
@@ -1483,6 +1579,18 @@ func _populate_city_inspector(city_id: int) -> void:
 	)
 	meta_hb.add_child(btn_book)
 
+	var c_books: Array = c_data.get("books", [])
+	if not c_books.is_empty():
+		var bk_titles: Array[String] = []
+		for bk in c_books:
+			bk_titles.append("«%s»" % str(bk.get("title", "Том")))
+		var bk_l := Label.new()
+		bk_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		bk_l.text = "📚 Собрание сочинений полиса: %s" % ", ".join(bk_titles)
+		bk_l.add_theme_font_size_override("font_size", 11)
+		bk_l.add_theme_color_override("font_color", Color(0.92, 0.84, 1.0))
+		_vbox_city_content.add_child(bk_l)
+
 	var sp_id: int = int(c_data.get("subspecies_id", -1))
 	var chromo: Array = c_data.get("chromosomes", [])
 	var gene_hb := HFlowContainer.new()
@@ -1500,6 +1608,9 @@ func _populate_city_inspector(city_id: int) -> void:
 		var g_btn := Button.new()
 		g_btn.text = "%s%s" % ["✓ " if has_g else "+ ", g_asset.title]
 		g_btn.add_theme_font_size_override("font_size", 11)
+		var loc_ic: ImageTexture = _load_wb_tex("res://assets/worldbox/ui/locus_bg_synergy.png" if has_g else "res://assets/worldbox/ui/locus_bg_normal.png")
+		if loc_ic != null:
+			g_btn.icon = loc_ic
 		var g_bg := Color(0.08, 0.24, 0.18, 0.94) if has_g else Color(0.08, 0.12, 0.20, 0.88)
 		var g_brd := Color(0.35, 0.92, 0.65, 0.92) if has_g else Color(0.26, 0.44, 0.64, 0.68)
 		var g_fcol := Color(0.86, 1.0, 0.92) if has_g else Color(0.78, 0.86, 0.96)
@@ -1621,17 +1732,35 @@ func _populate_city_inspector(city_id: int) -> void:
 
 	var p_dict: Dictionary = c_data.get("active_plot", {})
 	if not p_dict.is_empty():
+		var p_hb := HBoxContainer.new()
+		p_hb.add_theme_constant_override("separation", 8)
+		_vbox_city_content.add_child(p_hb)
 		var p_l := Label.new()
 		var p_pct: int = int(clampf(float(p_dict.get("progress", 0.0)) / maxf(1.0, float(p_dict.get("progress_needed", 1.0))) * 100.0, 0.0, 100.0))
 		p_l.text = "🔬 Научный проект: %s [%d%%]" % [p_dict.get("title", ""), p_pct]
-		_vbox_city_content.add_child(p_l)
+		p_l.custom_minimum_size = Vector2(320, 0)
+		p_hb.add_child(p_l)
+		var p_bar := ProgressBar.new()
+		p_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		p_bar.value = float(p_pct)
+		_style_progress_bar(p_bar, Color(0.28, 0.88, 1.0, 0.92))
+		p_hb.add_child(p_bar)
 
 	var dp_dict: Dictionary = c_data.get("active_diplomatic_plot", {})
 	if not dp_dict.is_empty():
+		var dp_hb := HBoxContainer.new()
+		dp_hb.add_theme_constant_override("separation", 8)
+		_vbox_city_content.add_child(dp_hb)
 		var dp_l := Label.new()
 		var dp_pct: int = int(clampf(float(dp_dict.get("progress", 0.0)) / maxf(1.0, float(dp_dict.get("progress_needed", 1.0))) * 100.0, 0.0, 100.0))
 		dp_l.text = "🤝 Дипломатический проект: %s [%d%%]" % [dp_dict.get("title", ""), dp_pct]
-		_vbox_city_content.add_child(dp_l)
+		dp_l.custom_minimum_size = Vector2(320, 0)
+		dp_hb.add_child(dp_l)
+		var dp_bar := ProgressBar.new()
+		dp_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		dp_bar.value = float(dp_pct)
+		_style_progress_bar(dp_bar, Color(1.0, 0.82, 0.32, 0.92))
+		dp_hb.add_child(dp_bar)
 
 	var st_dict: Dictionary = c_data.get("storage", {})
 	var st_l := Label.new()
@@ -1663,7 +1792,29 @@ func _populate_actor_inspector(actor_id: int) -> void:
 		return
 
 	var top_hb := HBoxContainer.new()
+	top_hb.add_theme_constant_override("separation", 10)
 	_vbox_actor_content.add_child(top_hb)
+
+	var act_atlas_tex: ImageTexture = _load_wb_tex("res://assets/worldbox/atlas_actors_wb.png")
+	if act_atlas_tex != null:
+		var act_port := TextureRect.new()
+		var at_a := AtlasTexture.new()
+		at_a.atlas = act_atlas_tex
+		var role_s: String = str(a_data.get("role", "worker"))
+		var col_idx: int = 0
+		if role_s == "soldier" or role_s == "general":
+			col_idx = 4
+		elif role_s == "leader":
+			col_idx = 5
+		elif role_s == "scholar" or role_s == "astronaut":
+			col_idx = 6
+		at_a.region = Rect2(float(col_idx * 10), 0.0, 10.0, 10.0)
+		act_port.texture = at_a
+		act_port.custom_minimum_size = Vector2(40, 40)
+		act_port.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		act_port.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		act_port.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		top_hb.add_child(act_port)
 
 	var is_fav: bool = bool(a_data.get("is_favorite", false))
 	var name_l := Label.new()
@@ -1765,9 +1916,28 @@ func _populate_actor_inspector(actor_id: int) -> void:
 		else:
 			ptr_names.append(str(pt_id))
 	var ptr_l := Label.new()
-	ptr_l.text = "🧬 Личные черты: %s" % (", ".join(ptr_names) if not ptr_names.is_empty() else "Обычный")
+	ptr_l.text = "🧬 Личные черты (кликните для редактирования): %s" % (", ".join(ptr_names) if not ptr_names.is_empty() else "Обычный")
 	ptr_l.add_theme_color_override("font_color", Color(0.65, 0.95, 0.75))
 	_vbox_actor_content.add_child(ptr_l)
+
+	var ptr_flow := HFlowContainer.new()
+	ptr_flow.add_theme_constant_override("h_separation", 6)
+	ptr_flow.add_theme_constant_override("v_separation", 6)
+	_vbox_actor_content.add_child(ptr_flow)
+	for pt_asset in sim.assets.personal_trait_list:
+		var tid_p: String = pt_asset.id
+		var has_pt: bool = ptrs.has(tid_p)
+		var pt_btn := Button.new()
+		pt_btn.text = ("%s%s" % ["✓ " if has_pt else "+ ", pt_asset.title])
+		pt_btn.add_theme_font_size_override("font_size", 11)
+		var pt_bg := Color(0.08, 0.24, 0.18, 0.94) if has_pt else Color(0.08, 0.12, 0.20, 0.88)
+		var pt_brd := Color(0.35, 0.92, 0.65, 0.92) if has_pt else Color(0.26, 0.44, 0.64, 0.68)
+		_apply_btn_theme(pt_btn, pt_bg, pt_brd, Color(0.88, 1.0, 0.92) if has_pt else Color(0.78, 0.86, 0.96))
+		pt_btn.pressed.connect(func() -> void:
+			sim.toggle_actor_personal_trait(actor_id, tid_p)
+			_populate_actor_inspector(actor_id)
+		)
+		ptr_flow.add_child(pt_btn)
 
 	var needs_l := Label.new()
 	needs_l.text = "🍞 Сытость: %.0f%% | 😊 Счастье: %.0f%% | ⚡ Выносливость: %.0f%%" % [
@@ -1777,6 +1947,20 @@ func _populate_actor_inspector(actor_id: int) -> void:
 	]
 	needs_l.add_theme_color_override("font_color", Color(0.95, 0.88, 0.55))
 	_vbox_actor_content.add_child(needs_l)
+
+	var needs_bars_hb := HBoxContainer.new()
+	needs_bars_hb.add_theme_constant_override("separation", 10)
+	_vbox_actor_content.add_child(needs_bars_hb)
+	for nb_def in [
+		["nutrition", Color(0.95, 0.68, 0.24, 0.92)],
+		["happiness", Color(0.32, 0.92, 0.58, 0.92)],
+		["stamina", Color(0.28, 0.82, 1.0, 0.92)]
+	]:
+		var nb := ProgressBar.new()
+		nb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nb.value = clampf(float(a_data.get(nb_def[0], 100.0)), 0.0, 100.0)
+		_style_progress_bar(nb, nb_def[1])
+		needs_bars_hb.add_child(nb)
 
 	var fam_l := Label.new()
 	fam_l.text = "👪 Семья: %s | Поколение: #%d | Детей: %d | Родители: %d/%d" % [
@@ -2080,6 +2264,35 @@ func _refresh_laws_modal() -> void:
 		)
 		_vbox_laws_list.add_child(cb)
 
+	_vbox_laws_list.add_child(HSeparator.new())
+	var const_head := Label.new()
+	const_head.text = "ФУНДАМЕНТАЛЬНЫЕ ФИЗИЧЕСКИЕ КОНСТАНТЫ ВСЕЛЕННОЙ (G, c, σ, μ):"
+	const_head.add_theme_font_size_override("font_size", 13)
+	const_head.add_theme_color_override("font_color", Color(0.38, 0.92, 1.0))
+	_vbox_laws_list.add_child(const_head)
+
+	for pc in sim.assets.physical_constant_list:
+		var c_id: String = pc.id
+		var cur_v: float = sim.get_world_constant(c_id)
+		var row_c := HBoxContainer.new()
+		row_c.add_theme_constant_override("separation", 10)
+		_vbox_laws_list.add_child(row_c)
+		var c_lbl := Label.new()
+		c_lbl.text = "%s [%.2f]:" % [pc.title, cur_v]
+		c_lbl.custom_minimum_size = Vector2(260, 0)
+		row_c.add_child(c_lbl)
+		var slider := HSlider.new()
+		slider.min_value = pc.min_val
+		slider.max_value = pc.max_val
+		slider.step = 0.05
+		slider.value = cur_v
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.value_changed.connect(func(v: float) -> void:
+			sim.set_world_constant(c_id, v)
+			c_lbl.text = "%s [%.2f]:" % [pc.title, sim.get_world_constant(c_id)]
+		)
+		row_c.add_child(slider)
+
 
 # ==============================================================================
 # ВЫБОР ВКЛАДКИ И БОЖЕСТВЕННОЙ СИЛЫ
@@ -2095,11 +2308,14 @@ func _select_tab(tab_id: String) -> void:
 		_apply_btn_theme(btn, bg, brd, fcol)
 
 	for ch in _hbox_powers.get_children():
+		_hbox_powers.remove_child(ch)
 		ch.queue_free()
 
 	var first_id: String = ""
 	var all_tab_powers: Array[SandboxAssetScript.GodPowerAsset] = []
 	all_tab_powers.append_array(sim.assets.god_power_list)
+	all_tab_powers.append_array(sim.assets.cataclysm_power_list)
+	all_tab_powers.append_array(sim.assets.transmutation_power_list)
 	all_tab_powers.append_array(sim.assets.worldbox_power_list)
 	for gp in all_tab_powers:
 		if gp.tab_id != selected_tab:
@@ -2107,13 +2323,17 @@ func _select_tab(tab_id: String) -> void:
 		if first_id == "":
 			first_id = gp.id
 		var pb := Button.new()
-		pb.text = gp.title
-		pb.custom_minimum_size = Vector2(118, 40)
-		pb.add_theme_font_size_override("font_size", 11)
 		var pid: String = gp.id
+		pb.text = ""
+		pb.set_meta("power_id", pid)
+		pb.set_meta("power_title", gp.title)
+		pb.custom_minimum_size = Vector2(54, 48)
+		pb.add_theme_font_size_override("font_size", 10)
 		var p_ic: ImageTexture = _get_power_wb_icon(pid)
 		if p_ic != null:
 			pb.icon = p_ic
+			pb.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			pb.expand_icon = true
 		pb.tooltip_text = "%s\n%s" % [gp.title, gp.description]
 		var pcol: Color = gp.beam_color
 		var is_sel: bool = (pid == selected_power_id)
@@ -2148,12 +2368,15 @@ func _select_power(power_id: String) -> void:
 	# Перерисуем подсветку кнопок текущей вкладки
 	var all_tab_powers: Array[SandboxAssetScript.GodPowerAsset] = []
 	all_tab_powers.append_array(sim.assets.god_power_list)
+	all_tab_powers.append_array(sim.assets.cataclysm_power_list)
+	all_tab_powers.append_array(sim.assets.transmutation_power_list)
 	all_tab_powers.append_array(sim.assets.worldbox_power_list)
 	for ch in _hbox_powers.get_children():
 		if ch is Button:
 			var b: Button = ch
+			var btn_pid: String = str(b.get_meta("power_id", ""))
 			for gp in all_tab_powers:
-				if gp.tab_id == selected_tab and gp.title == b.text:
+				if gp.tab_id == selected_tab and (gp.id == btn_pid or gp.title == b.text):
 					var is_sel: bool = (gp.id == selected_power_id)
 					var pcol: Color = gp.beam_color
 					var bg := Color(pcol.r * 0.35, pcol.g * 0.35, pcol.b * 0.35, 0.98) if is_sel else Color(0.07, 0.11, 0.18, 0.92)
@@ -2248,8 +2471,10 @@ func _refresh_telemetry_and_lists() -> void:
 	_update_speed_button_styles()
 
 	var k_max: float = sim.get_max_kardashev_level()
-	_lbl_system_title.text = "★ %s | Г.%d | K-%.2f" % [
-		sim.star_name, int(sim.world_year), k_max
+	var age_a := sim.get_current_world_age_asset()
+	var age_short: String = age_a.title.replace("Эпоха ", "") if age_a != null else sim.current_age_id
+	_lbl_system_title.text = "★ %s | Г.%d | K-%.2f | %s" % [
+		sim.star_name, int(sim.world_year), k_max, age_short
 	]
 
 	_lbl_resources.text = "МАТЕРИЯ: %s (+%s/с)  |  ЭНЕРГИЯ: %s ГВт (+%s/с)  |  НАУКА: %s ПФ (+%s/с)  |  КОДЕКС: %d" % [

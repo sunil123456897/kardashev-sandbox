@@ -4,10 +4,10 @@ uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
 uniform vec2 center = vec2(0.5, 0.5);
 uniform float progress : hint_range(0.0, 1.0) = 0.0;
 uniform float radius : hint_range(0.0, 1.0) = 0.4;
-uniform float thickness : hint_range(0.01, 0.3) = 0.06;
-uniform float force : hint_range(0.0, 0.2) = 0.04;
+uniform float thickness : hint_range(0.01, 0.3) = 0.018;
+uniform float force : hint_range(0.0, 0.2) = 0.028;
 uniform vec4 shock_color : source_color = vec4(0.25, 0.90, 1.0, 1.0);
-uniform float chromatic_aberration : hint_range(0.0, 0.05) = 0.018;
+uniform float chromatic_aberration : hint_range(0.0, 0.05) = 0.014;
 uniform float aspect_ratio = 1.7777778;
 
 void fragment() {
@@ -37,7 +37,7 @@ void fragment() {
 		vec3 refracted = vec3(r, g, b);
 
 		// Additive energy crest illumination
-		vec3 rim_glow = shock_color.rgb * mask * 1.6;
+		vec3 rim_glow = shock_color.rgb * mask * 0.32;
 		COLOR = vec4(refracted + rim_glow, 1.0);
 	}
 }

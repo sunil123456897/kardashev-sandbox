@@ -120,8 +120,8 @@ func request_dirty_tiles_update(tile_indices: Array) -> void:
 			min_gy = mini(min_gy, gy)
 			max_gx = maxi(max_gx, gx)
 			max_gy = maxi(max_gy, gy)
-	# Если изменились 2–5 разрозненных тайлов на разных концах карты, обновляем каждый локально (350 пикселей вместо 55,000)
-	if tile_indices.size() <= 5 and (max_gx - min_gx > 4 or max_gy - min_gy > 4):
+	# Если изменились 2–12 разрозненных тайлов на разных концах карты, обновляем каждый локально (350 пикселей вместо 55,000)
+	if tile_indices.size() <= 12 and (max_gx - min_gx > 4 or max_gy - min_gy > 4):
 		for idx in tile_indices:
 			var t_idx: int = int(idx)
 			if t_idx >= 0 and t_idx < TILE_COUNT:
@@ -269,6 +269,17 @@ var languages_map: Dictionary = {}
 var books_list: Array[Dictionary] = []
 var total_fires_extinguished_by_water: int = 0
 var total_social_chats: int = 0
+var active_sieges: Array[Dictionary] = []
+var total_amphibious_landings: int = 0
+var total_siege_fires_ignited: int = 0
+var dyson_planetary_cooling_active: bool = false
+var total_eclipse_frozen_tiles: int = 0
+var active_great_filter_crisis_id: String = ""
+var total_great_filter_crises_triggered: int = 0
+var map_event_markers: Array[Dictionary] = []
+var total_map_markers_spawned: int = 0
+var active_colossus_beams: Array[Dictionary] = []
+var total_colossus_laser_strikes: int = 0
 
 
 var _next_meta_id: int = 1
@@ -329,6 +340,17 @@ func setup_world(seed_val: int = 1337, preserve_codex: bool = false) -> void:
 	books_list.clear()
 	total_fires_extinguished_by_water = 0
 	total_social_chats = 0
+	active_sieges.clear()
+	total_amphibious_landings = 0
+	total_siege_fires_ignited = 0
+	dyson_planetary_cooling_active = false
+	total_eclipse_frozen_tiles = 0
+	active_great_filter_crisis_id = ""
+	total_great_filter_crises_triggered = 0
+	map_event_markers.clear()
+	total_map_markers_spawned = 0
+	active_colossus_beams.clear()
+	total_colossus_laser_strikes = 0
 	flora_instances.clear()
 	dyson_rings.clear()
 	diplomacy_relations.clear()
@@ -772,11 +794,14 @@ func sample_fine_world_tile(px: int, py: int) -> Dictionary:
 
 	var fine_idx: int = c_py * FINE_W + c_px
 	var road_val: int = fine_road_overlay[fine_idx] if fine_idx < fine_road_overlay.size() else 0
-	var has_road: bool = (road_val == 1 and tier >= 3 and tier <= 5)
+	var has_road: bool = ((road_val == 1 or road_val == 4) and tier >= 3 and tier <= 5)
+	var has_cyber_road: bool = (road_val == 4 and tier >= 3 and tier <= 5)
 	var has_field: bool = (road_val == 2 and tier >= 3 and tier <= 5)
 
 	var base_tile_id: String = get_base_tile_id_for_tier(tier, biome_id)
-	if has_road:
+	if has_cyber_road:
+		base_tile_id = "cyber_road"
+	elif has_road:
 		base_tile_id = "road"
 	elif has_field:
 		base_tile_id = "field"
@@ -818,6 +843,7 @@ func sample_fine_world_tile(px: int, py: int) -> Dictionary:
 		"city_id": c_id,
 		"is_zone_border": is_zone_border,
 		"has_road": has_road,
+		"has_cyber_road": has_cyber_road,
 		"has_field": has_field
 	}
 
@@ -860,21 +886,29 @@ func _carve_city_roads_and_fields(city: Dictionary) -> void:
 	var c_pos: Vector2 = city["map_pos"]
 	var cx0: int = clampi(int(c_pos.x / MAP_PIXEL_W * float(FINE_W)), 2, FINE_W - 3)
 	var cy0: int = clampi(int(c_pos.y / MAP_PIXEL_H * float(FINE_H)), 2, FINE_H - 3)
+	var road_code: int = 4 if float(city.get("kardashev_level", 0.50)) >= 0.78 else 1
 
-	# Центральная мощёная площадь вокруг ратуши (3x3 микро-тайла road #C1997C)
+	# Центральная мощёная площадь вокруг ратуши (3x3 микро-тайла: 1 = мостовая Эры I, 4 = квантовая магистраль Эры II+)
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			var r_idx: int = (cy0 + dy) * FINE_W + (cx0 + dx)
-			fine_road_overlay[r_idx] = 1
+			fine_road_overlay[r_idx] = road_code
 
-	# Террасные фермерские поля (field #A8663A) рядом с центром полиса
-	for fy in range(-4, -1):
-		for fx in range(-4, 0):
-			var f_px: int = clampi(cx0 + fx, 1, FINE_W - 2)
-			var f_py: int = clampi(cy0 + fy, 1, FINE_H - 2)
-			fine_road_overlay[f_py * FINE_W + f_px] = 2
+	# Террасные фермерские поля (field #A8663A) с золотистыми бороздами вокруг центра полиса (2 веерных надела)
+	var field_patches := [
+		Rect2i(-7, -5, 6, 4),
+		Rect2i(2, 2, 5, 4)
+	]
+	for fp in field_patches:
+		for fy in range(fp.position.y, fp.position.y + fp.size.y):
+			for fx in range(fp.position.x, fp.position.x + fp.size.x):
+				var f_px: int = clampi(cx0 + fx, 1, FINE_W - 2)
+				var f_py: int = clampi(cy0 + fy, 1, FINE_H - 2)
+				var f_idx: int = f_py * FINE_W + f_px
+				if fine_road_overlay[f_idx] == 0:
+					fine_road_overlay[f_idx] = 2
 
-	# Прокладываем дороги (road #C1997C) от каждого здания к центру города (L-образная трассировка как в WorldBox)
+	# Прокладываем ортогональные улицы шириной 2 микро-тайла от каждого здания к площади (без диагонального решета)
 	var inst_list: Array = city.get("building_instances", [])
 	for b_inst in inst_list:
 		var b_pos: Vector2 = b_inst["map_pos"]
@@ -883,19 +917,36 @@ func _carve_city_roads_and_fields(city: Dictionary) -> void:
 		var cur_x: int = bx
 		var cur_y: int = by
 		var steps: int = 0
-		while (cur_x != cx0 or cur_y != cy0) and steps < 64:
-			fine_road_overlay[cur_y * FINE_W + cur_x] = 1
-			if cur_x != cx0 and (steps % 2 == 0 or cur_y == cy0):
-				cur_x += 1 if cx0 > cur_x else -1
-			elif cur_y != cy0:
-				cur_y += 1 if cy0 > cur_y else -1
+		var horiz_first: bool = ((bx + by) % 2 == 0)
+		while (cur_x != cx0 or cur_y != cy0) and steps < 72:
+			fine_road_overlay[cur_y * FINE_W + cur_x] = road_code
+			if cur_x + 1 < FINE_W - 1 and fine_road_overlay[cur_y * FINE_W + cur_x + 1] == 0:
+				fine_road_overlay[cur_y * FINE_W + cur_x + 1] = road_code
+			if horiz_first:
+				if cur_x != cx0:
+					cur_x += 1 if cx0 > cur_x else -1
+				elif cur_y != cy0:
+					cur_y += 1 if cy0 > cur_y else -1
+			else:
+				if cur_y != cy0:
+					cur_y += 1 if cy0 > cur_y else -1
+				elif cur_x != cx0:
+					cur_x += 1 if cx0 > cur_x else -1
 			steps += 1
 
 
 func count_road_tiles() -> int:
 	var cnt: int = 0
 	for i in range(fine_road_overlay.size()):
-		if fine_road_overlay[i] == 1:
+		if fine_road_overlay[i] == 1 or fine_road_overlay[i] == 4:
+			cnt += 1
+	return cnt
+
+
+func count_cyber_road_tiles() -> int:
+	var cnt: int = 0
+	for i in range(fine_road_overlay.size()):
+		if fine_road_overlay[i] == 4:
 			cnt += 1
 	return cnt
 
@@ -1000,6 +1051,7 @@ func _substep_simulation(sub_dt: float) -> void:
 	_step_actor_status_effects_and_needs(sub_dt)
 	_step_clouds_and_tornadoes(sub_dt)
 	_step_xeno_biomass(sub_dt)
+	_step_map_markers_and_colossus_beams(sub_dt)
 
 	_diplomacy_timer += sub_dt
 	while _diplomacy_timer >= DIPLOMACY_TICK_INTERVAL:
@@ -1122,7 +1174,7 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 	var jitter := Vector2(_rng.randf_range(-20.0, 20.0), _rng.randf_range(-12.0, 12.0))
 	var start_pos: Vector2 = (center_pos + jitter).clamp(Vector2(24.0, 24.0), Vector2(MAP_PIXEL_W - 24.0, MAP_PIXEL_H - 24.0))
 
-	var roles := ["gatherer", "builder", "scholar", "miner", "astronaut", "warrior"]
+	var roles := ["gatherer", "builder", "scholar", "miner", "astronaut", "warrior", "farmer", "gatherer_bushes", "hunter"]
 	var role: String = custom_role if custom_role != "" else roles[_rng.randi_range(0, roles.size() - 1)]
 
 	var thoughts_by_role := {
@@ -1133,6 +1185,10 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"astronaut": "Готовит пуск к Сфере Дайсона",
 		"warrior": "Охраняет рубежи полиса",
 		"general": "Ведёт легион полиса со знаменем",
+		"leader": "Правит полисом и издаёт указы",
+		"farmer": "Возделывает поля био-фермы",
+		"gatherer_bushes": "Собирает плоды с кустарников",
+		"hunter": "Выслеживает дикую фауну",
 		"colonist": "Плывёт основывать дочерний полис"
 	}
 
@@ -1144,6 +1200,10 @@ func _spawn_actor_unit(sp_id: int, tile_idx: int, city_id: int = -1, custom_role
 		"astronaut": "builder",
 		"warrior": "attacker",
 		"general": "attacker",
+		"leader": "builder",
+		"farmer": "farmer",
+		"gatherer_bushes": "gatherer_bushes",
+		"hunter": "hunter",
 		"colonist": "builder"
 	}
 
@@ -1337,6 +1397,33 @@ func _step_actors(dt: float) -> void:
 		var home_idx: int = clampi(int(a["home_tile"]), 0, TILE_COUNT - 1)
 		var local_time: float = clampf(float(tiles[home_idx]["time_scale_mult"]), 1.0, 6.0)
 		var move_speed: float = (38.0 if str(a.get("role", "")) == "colonist" else 32.0) * sqrt(local_time)
+		var r_px: int = clampi(int(pos.x / MAP_PIXEL_W * float(FINE_W)), 0, FINE_W - 1)
+		var r_py: int = clampi(int(pos.y / MAP_PIXEL_H * float(FINE_H)), 0, FINE_H - 1)
+		var f_idx_actor: int = r_py * FINE_W + r_px
+		var p_traits_a: Array = a.get("personal_traits", [])
+		if f_idx_actor >= 0 and f_idx_actor < fine_fire_time.size() and fine_fire_time[f_idx_actor] > 0.0:
+			if not bool(a.get("is_colossus", false)) and not p_traits_a.has("trait_pyromaniac") and not is_burning:
+				eff_map["status_burning"] = 4.0
+				a["status_effects"] = eff_map
+				is_burning = true
+		var sp_id_a: int = int(a.get("subspecies_id", -1))
+		if sp_id_a != -1 and subspecies_map.has(sp_id_a):
+			var ch_b: Dictionary = get_subspecies_chromosome_bonuses(sp_id_a)
+			move_speed *= float(ch_b.get("speed_mult", 1.0))
+		for tr_id in p_traits_a:
+			if assets.personal_traits.has(tr_id):
+				var pt_a: SandboxAssetScript.PersonalTraitAsset = assets.personal_traits[tr_id]
+				move_speed *= pt_a.speed_mult
+		for s_id in eff_map.keys():
+			if float(eff_map[s_id]) > 0.0 and assets.status_effects.has(s_id):
+				var se_a: SandboxAssetScript.StatusEffectAsset = assets.status_effects[s_id]
+				move_speed *= se_a.speed_mult
+		if fine_road_overlay.size() == FINE_COUNT:
+			var r_under: int = fine_road_overlay[f_idx_actor]
+			if r_under == 4:
+				move_speed *= 1.35 # Квантовая магистраль Эры II+ ускоряет граждан на +35%
+			elif r_under == 1:
+				move_speed *= 1.12 # Каменная мостовая Эры I ускоряет граждан на +12%
 
 		# DecisionsLibrary.run_to_water_when_on_fire: горящий юнит бежит к ближайшей воде и тушит пламя!
 		if is_burning:
@@ -1385,17 +1472,17 @@ func _step_actors(dt: float) -> void:
 						a["target_pos"] = city["map_pos"]
 						a["job_state"] = "CARRY_TO_STORAGE"
 						a["thought"] = "Несёт кристаллическую руду в ратушу"
-					elif j_id == "farmer" or j_id == "gatherer_bushes":
+					elif j_id == "farmer" or j_id == "gatherer_bushes" or j_id == "hunter":
 						a["carrying"] = "food"
 						a["target_pos"] = city["map_pos"]
 						a["job_state"] = "CARRY_TO_STORAGE"
-						a["thought"] = "Несёт урожай в хранилище"
+						a["thought"] = "Несёт провизию в хранилище"
 					else:
 						# Строитель / Дорожник завершает участок работ и ускоряет возведение здания в полисе
 						var wx: int = clampi(int(pos.x / MAP_PIXEL_W * float(FINE_W)), 1, FINE_W - 2)
 						var wy: int = clampi(int(pos.y / MAP_PIXEL_H * float(FINE_H)), 1, FINE_H - 2)
 						if fine_road_overlay.size() == FINE_COUNT and sample_elevation_fast(pos.x / MAP_PIXEL_W, pos.y / MAP_PIXEL_H) >= 0.01:
-							fine_road_overlay[wy * FINE_W + wx] = 1
+							fine_road_overlay[wy * FINE_W + wx] = 4 if float(city.get("kardashev_level", 0.50)) >= 0.78 else 1
 						city["build_progress"] = float(city.get("build_progress", 0.0)) + 1.8
 						total_citizen_tasks_completed += 1
 						a["job_state"] = "IDLE"
@@ -1494,7 +1581,7 @@ func _assign_next_citizen_job_target(a: Dictionary, city: Dictionary) -> void:
 				a["thought"] = "В строю легиона атакует «%s»" % enemy_city["name"]
 				return
 
-	if (j_id == "woodcutter" or j_id == "miner") and not flora_instances.is_empty():
+	if (j_id == "woodcutter" or j_id == "miner" or j_id == "farmer" or j_id == "gatherer_bushes") and not flora_instances.is_empty():
 		var want_mineral: bool = (j_id == "miner")
 		var best_f_idx: int = -1
 		var best_d: float = 260.0
@@ -1513,8 +1600,31 @@ func _assign_next_citizen_job_target(a: Dictionary, city: Dictionary) -> void:
 			a["target_flora_idx"] = best_f_idx
 			a["target_pos"] = flora_instances[best_f_idx]["pos"]
 			a["job_state"] = "MOVE_TO_TARGET"
-			a["thought"] = "Идёт добывать руду" if want_mineral else "Идёт рубить лес"
+			if j_id == "miner":
+				a["thought"] = "Идёт добывать руду"
+			elif j_id == "farmer":
+				a["thought"] = "Возделывает агро-поля полиса"
+			elif j_id == "gatherer_bushes":
+				a["thought"] = "Идёт собирать плоды с кустарников"
+			else:
+				a["thought"] = "Идёт рубить лес"
 			return
+
+	if j_id == "hunter":
+		for other_a in actors:
+			if bool(other_a.get("is_fauna", false)) and int(other_a["id"]) != int(a["id"]):
+				if (other_a["pos"] as Vector2).distance_to(c_pos) <= 320.0:
+					a["target_flora_idx"] = -1
+					a["target_pos"] = other_a["pos"]
+					a["job_state"] = "MOVE_TO_TARGET"
+					a["thought"] = "Выслеживает дикую фауну"
+					return
+
+	if role == "leader":
+		a["target_pos"] = c_pos + Vector2(_rng.randf_range(-14.0, 14.0), _rng.randf_range(-10.0, 10.0))
+		a["job_state"] = "MOVE_TO_TARGET"
+		a["thought"] = "Правит державой «%s»" % city.get("name", "")
+		return
 
 	var b_insts: Array = city.get("building_instances", [])
 	if (j_id == "builder" or j_id == "road_builder") and not b_insts.is_empty():
@@ -1699,10 +1809,7 @@ func _step_cellular_fire(dt: float) -> void:
 	if active_fire_count <= 0 or fine_fire_time.size() != FINE_COUNT:
 		return
 	var still_burning: int = 0
-	var min_x: int = FINE_W
-	var min_y: int = FINE_H
-	var max_x: int = 0
-	var max_y: int = 0
+	var changed_coords: Array[Vector2i] = []
 	var newly_ignited: Array[int] = []
 
 	for fy in range(1, FINE_H - 1):
@@ -1714,10 +1821,11 @@ func _step_cellular_fire(dt: float) -> void:
 				rem -= dt
 				if rem <= 0.0:
 					fine_fire_time[f_idx] = 0.0
+					changed_coords.append(Vector2i(fx, fy))
 				else:
 					fine_fire_time[f_idx] = rem
 					still_burning += 1
-					if _rng.randf() < 0.16 * dt and newly_ignited.size() < 24:
+					if _rng.randf() < 0.16 * dt and newly_ignited.size() < 12:
 						var nfx: int = fx + _rng.randi_range(-1, 1)
 						var nfy: int = fy + _rng.randi_range(-1, 1)
 						var n_idx: int = nfy * FINE_W + nfx
@@ -1726,18 +1834,38 @@ func _step_cellular_fire(dt: float) -> void:
 							var nv: float = (float(nfy) + 0.5) / float(FINE_H)
 							if sample_elevation_fast(nu, nv) >= 0.02:
 								newly_ignited.append(n_idx)
-				min_x = mini(min_x, fx)
-				min_y = mini(min_y, fy)
-				max_x = maxi(max_x, fx)
-				max_y = maxi(max_y, fy)
+								changed_coords.append(Vector2i(nfx, nfy))
 
 	for n_idx in newly_ignited:
 		fine_fire_time[n_idx] = 4.5
 		still_burning += 1
 
 	active_fire_count = still_burning
-	if min_x <= max_x and min_y <= max_y:
-		request_dirty_rect_update(Rect2i(maxi(0, min_x - 2), maxi(0, min_y - 2), mini(FINE_W, max_x - min_x + 5), mini(FINE_H, max_y - min_y + 5)))
+	if still_burning > 0 and _rng.randf() < 0.25 * dt and not newly_ignited.is_empty():
+		var sample_f_idx: int = newly_ignited[0]
+		var sfx: int = sample_f_idx % FINE_W
+		var sfy: int = int(sample_f_idx / FINE_W)
+		var f_world_pos := Vector2((float(sfx) + 0.5) / float(FINE_W) * MAP_PIXEL_W, (float(sfy) + 0.5) / float(FINE_H) * MAP_PIXEL_H)
+		for fl_i in range(flora_instances.size() - 1, -1, -1):
+			if not bool(flora_instances[fl_i].get("is_mineral", false)) and (flora_instances[fl_i]["pos"] as Vector2).distance_to(f_world_pos) <= 14.0:
+				flora_instances.remove_at(fl_i)
+				break
+	if not changed_coords.is_empty():
+		var min_x: int = FINE_W
+		var min_y: int = FINE_H
+		var max_x: int = 0
+		var max_y: int = 0
+		for pt in changed_coords:
+			min_x = mini(min_x, pt.x)
+			min_y = mini(min_y, pt.y)
+			max_x = maxi(max_x, pt.x)
+			max_y = maxi(max_y, pt.y)
+		if (max_x - min_x) <= 28 and (max_y - min_y) <= 28:
+			request_dirty_rect_update(Rect2i(maxi(0, min_x - 2), maxi(0, min_y - 2), mini(FINE_W, max_x - min_x + 5), mini(FINE_H, max_y - min_y + 5)))
+		else:
+			for i in range(mini(changed_coords.size(), 8)):
+				var pt: Vector2i = changed_coords[i]
+				request_dirty_rect_update(Rect2i(maxi(0, pt.x - 3), maxi(0, pt.y - 3), 7, 7))
 
 
 func set_world_age(age_id: String) -> bool:
@@ -1745,12 +1873,15 @@ func set_world_age(age_id: String) -> bool:
 		return false
 	if current_age_id == age_id:
 		return true
+	var prev_age: String = current_age_id
 	current_age_id = age_id
 	age_timer = 0.0
 	var wa: SandboxAssetScript.WorldAgeAsset = assets.world_ages[age_id]
 	_log_event("СМЕНА КОСМИЧЕСКОЙ ЭПОХИ: Наступила «%s» — %s" % [wa.title, wa.description], "cosmos", wa.ambient_tint)
-	request_dirty_rect_update(Rect2i(0, 0, FINE_W, FINE_H))
-	planet_surface_changed.emit()
+	if prev_age == "age_of_ice" or age_id == "age_of_ice":
+		planet_surface_changed.emit()
+	else:
+		request_dirty_rect_update(Rect2i(0, 0, 2, 2))
 	telemetry_updated.emit()
 	return true
 
@@ -2110,9 +2241,10 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		"storage": {"wood": 25, "minerals": 20, "food": 35},
 		"population": 28.0,
 		"kardashev_level": 0.50,
+		"era": 1,
 		"science_tier": 1,
 		"build_progress": 0.0,
-		"buildings": {"order_bio_dome": 1},
+		"buildings": {"order_bio_dome": 3, "order_geothermal_extractor": 1},
 		"building_instances": [],
 		"orbital_drones": 2,
 		"active_plot_id": -1,
@@ -2152,10 +2284,15 @@ func _uplift_subspecies_and_found_city(sp_id: int, tile_idx: int) -> int:
 		if int(a["subspecies_id"]) == sp_id and int(a["city_id"]) == -1:
 			a["city_id"] = city_id
 	for _u in range(6):
-		var role_override: String = "general" if _u == 0 else ""
+		var role_override: String = "general" if _u == 0 else ("leader" if _u == 1 else "")
 		var spawned := _spawn_actor_unit(sp_id, tile_idx, city_id, role_override)
 		if _u == 0 and not spawned.is_empty():
 			city_rec["general_actor_id"] = int(spawned["id"])
+		elif _u == 1 and not spawned.is_empty():
+			city_rec["leader_actor_id"] = int(spawned["id"])
+			var k_id_c: int = int(city_rec.get("kingdom_id", city_id))
+			if kingdoms_map.has(k_id_c):
+				kingdoms_map[k_id_c]["emperor_actor_id"] = int(spawned["id"])
 
 	_log_event(
 		"Разум пробудился! Вид «%s» основал научный полис «%s» (планировка: %s)." % [sp["name"], c_name, chosen_layout],
@@ -2309,6 +2446,7 @@ func _tick_city_build_orders(dt: float) -> void:
 
 				_expand_city_territory(city)
 				_rebuild_city_2d_instances(city)
+				check_and_apply_city_era_transition(city)
 				structures_changed = true
 
 				_log_event(
@@ -2333,6 +2471,93 @@ func _tick_city_build_orders(dt: float) -> void:
 	if structures_changed:
 		city_structures_changed.emit()
 	telemetry_updated.emit()
+
+
+func get_era_for_kardashev(k_level: float) -> int:
+	if k_level >= 1.25:
+		return 3
+	elif k_level >= 0.78:
+		return 2
+	return 1
+
+
+func get_city_era(city_id: int) -> int:
+	if not cities_map.has(city_id):
+		return 1
+	var city: Dictionary = cities_map[city_id]
+	return get_era_for_kardashev(float(city.get("kardashev_level", 0.50)))
+
+
+func check_and_apply_city_era_transition(city: Dictionary) -> bool:
+	var k_lvl: float = float(city.get("kardashev_level", 0.50))
+	var new_era: int = get_era_for_kardashev(k_lvl)
+	var prev_era: int = int(city.get("era", 1))
+	if new_era == prev_era:
+		return false
+
+	city["era"] = new_era
+	var cid: int = int(city["id"])
+	var b_dict: Dictionary = city["buildings"]
+
+	if new_era >= 2:
+		b_dict["order_bio_dome"] = maxi(2, int(b_dict.get("order_bio_dome", 0)))
+		b_dict["order_geothermal_extractor"] = maxi(1, int(b_dict.get("order_geothermal_extractor", 0)))
+		b_dict["order_cognitive_spire"] = maxi(1, int(b_dict.get("order_cognitive_spire", 0)))
+		b_dict["order_planetary_collider"] = maxi(1, int(b_dict.get("order_planetary_collider", 0)))
+		city["science_tier"] = maxi(int(city.get("science_tier", 1)), 3)
+
+	if new_era >= 3:
+		b_dict["order_orbital_elevator"] = maxi(1, int(b_dict.get("order_orbital_elevator", 0)))
+		b_dict["order_dyson_swarm_launcher"] = maxi(1, int(b_dict.get("order_dyson_swarm_launcher", 0)))
+		b_dict["order_stellar_harvester"] = maxi(1, int(b_dict.get("order_stellar_harvester", 0)))
+		b_dict["order_matrioshka_node"] = maxi(1, int(b_dict.get("order_matrioshka_node", 0)))
+		city["science_tier"] = maxi(int(city.get("science_tier", 1)), 6)
+		city["orbital_drones"] = int(city.get("orbital_drones", 0)) + 24
+		_add_sails_to_dyson_swarm(24, city["color"])
+		rocket_launched.emit(city["map_pos"], city["color"], city["name"])
+
+	_rebuild_city_2d_instances(city)
+	for b_inst in city["building_instances"]:
+		b_inst["spawn_spring"] = 0.12
+
+	for b in boats:
+		if int(b.get("city_id", -1)) == cid:
+			b["era"] = new_era
+
+	request_dirty_tiles_update(city["claimed_tiles"])
+	planet_surface_changed.emit()
+	city_structures_changed.emit()
+
+	var sw_col: Color = Color(0.22, 0.94, 1.0) if new_era == 2 else Color(1.0, 0.86, 0.28)
+	shockwave_triggered.emit(city["map_pos"], 76.0, sw_col)
+	var era_title: String = "Эра II: Планетарный Синтез (K-I)" if new_era == 2 else ("Эра III: Звёздная Инженерия (K-II..III)" if new_era == 3 else "Эра I: Доиндустриальная Колыбель")
+	var era_short: String = "⚡ ПРОРЫВ ЭРЫ II: %s" % city["name"] if new_era == 2 else ("★ ЭРА III ЗВЁЗДНАЯ: %s" % city["name"] if new_era == 3 else "Эра I: %s" % city["name"])
+	spawn_map_event_marker(city["map_pos"], era_short, "breakthrough", sw_col, 9.5)
+	_log_event(
+		"ПРОРЫВ ЭПОХИ! Полис «%s» совершил фазовый переход → %s (K-%.2f)!" % [city["name"], era_title, k_lvl],
+		"breakthrough",
+		sw_col
+	)
+	return true
+
+
+func advance_city_to_era(city_id: int, target_era: int) -> Dictionary:
+	if not cities_map.has(city_id):
+		return {}
+	var city: Dictionary = cities_map[city_id]
+	var clamped_era: int = clampi(target_era, 1, 3)
+	if clamped_era == 1:
+		city["kardashev_level"] = 0.55
+		city["era"] = 2 # Чтобы принудительно обновить здания и дороги в Эру I
+		city["buildings"] = {"order_bio_dome": 3, "order_geothermal_extractor": 1}
+	elif clamped_era == 2:
+		city["kardashev_level"] = maxf(0.85, float(city.get("kardashev_level", 0.50)))
+		if float(city["kardashev_level"]) >= 1.25:
+			city["kardashev_level"] = 0.95
+	else:
+		city["kardashev_level"] = maxf(1.38, float(city.get("kardashev_level", 0.50)))
+	check_and_apply_city_era_transition(city)
+	return city
 
 
 func _tick_city_forge_and_army(city: Dictionary) -> void:
@@ -2402,7 +2627,7 @@ func forge_city_equipment_for_actor(city_id: int, actor_id: int = -1) -> String:
 	if target_actor.is_empty():
 		return ""
 
-	var max_tier: int = clampi(int(city.get("science_tier", 1)), 1, 3)
+	var max_tier: int = clampi(int(city.get("science_tier", 1)), 1, 4)
 	var cur_w: String = str(target_actor.get("weapon_id", ""))
 	var cur_a: String = str(target_actor.get("armor_id", ""))
 	var desired_slot: String = "weapon"
@@ -2428,6 +2653,9 @@ func forge_city_equipment_for_actor(city_id: int, actor_id: int = -1) -> String:
 		target_actor["weapon_id"] = chosen_eq.id
 	else:
 		target_actor["armor_id"] = chosen_eq.id
+	if chosen_eq.hp_bonus > 0:
+		target_actor["max_hp"] = int(target_actor.get("max_hp", 100)) + chosen_eq.hp_bonus
+		target_actor["hp"] = mini(int(target_actor.get("hp", 100)) + chosen_eq.hp_bonus, int(target_actor["max_hp"]))
 	city["forged_items_count"] = int(city.get("forged_items_count", 0)) + 1
 	total_items_forged += 1
 	return chosen_eq.id
@@ -2499,9 +2727,13 @@ func _rebuild_city_2d_instances(city: Dictionary) -> void:
 			var tile_anchor: Vector2 = center_pos
 			if not claimed.is_empty():
 				tile_anchor = tiles[int(claimed[slot_idx % claimed.size()])]["map_pos"]
-			var pos_2d: Vector2 = (tile_anchor.lerp(center_pos, 0.35) + offset_px * 0.45).clamp(
+			var pos_2d: Vector2 = center_pos if slot_idx == 0 else (tile_anchor.lerp(center_pos, 0.42) + offset_px * 0.72).clamp(
 				Vector2(28.0, 28.0), Vector2(MAP_PIXEL_W - 28.0, MAP_PIXEL_H - 28.0)
 			)
+			if slot_idx > 0 and sample_elevation_fast(pos_2d.x / MAP_PIXEL_W, pos_2d.y / MAP_PIXEL_H) < 0.015:
+				pos_2d = (center_pos + offset_px * 0.58).clamp(Vector2(28.0, 28.0), Vector2(MAP_PIXEL_W - 28.0, MAP_PIXEL_H - 28.0))
+				if sample_elevation_fast(pos_2d.x / MAP_PIXEL_W, pos_2d.y / MAP_PIXEL_H) < 0.015:
+					pos_2d = center_pos.lerp(tile_anchor, 0.35)
 			var spring_val: float = 1.0
 			if slot_idx < prev_count:
 				spring_val = float(prev_instances[slot_idx].get("spawn_spring", 1.0))
@@ -2532,17 +2764,17 @@ func _layout_offset_2d_pixels(layout: String, idx: int) -> Vector2:
 	match layout:
 		"honeycomb":
 			angle += float(ring % 2) * (PI / 6.0)
-			return Vector2(cos(angle), sin(angle)) * (26.0 * float(ring))
+			return Vector2(cos(angle), sin(angle)) * (32.0 * float(ring))
 		"monolith_mesh":
 			var gx: int = (idx % 5) - 2
 			var gz: int = int(idx / 5) - 1
-			return Vector2(float(gx) * 24.0, float(gz) * 20.0)
+			return Vector2(float(gx) * 30.0, float(gz) * 24.0)
 		"fractal":
 			var f_ang: float = float(idx) * 2.3999632
-			var f_rad: float = 18.0 * sqrt(float(idx))
+			var f_rad: float = 24.0 * sqrt(float(idx))
 			return Vector2(cos(f_ang), sin(f_ang)) * f_rad
 		_:
-			return Vector2(cos(angle), sin(angle)) * (25.0 * float(ring))
+			return Vector2(cos(angle), sin(angle)) * (32.0 * float(ring))
 
 
 # ==============================================================================
@@ -2642,6 +2874,7 @@ func _complete_plot(city: Dictionary, cult: Dictionary, plot: Dictionary, p_asse
 
 	city["kardashev_level"] = minf(3.0, float(city["kardashev_level"]) + 0.18)
 	city["science_tier"] = int(city["science_tier"]) + 1
+	check_and_apply_city_era_transition(city)
 
 	_log_event(
 		"ПРОРЫВ ЦИВИЛИЗАЦИИ! Полис «%s» завершил «%s» → открыта парадигма «%s» (Кардашёв %.2f)!" % [
@@ -2761,6 +2994,8 @@ func _tick_dyson_swarm_and_star(dt: float) -> void:
 		star_stability = clampf(star_stability - load_ratio * 0.005 * dt, 0.15, 1.0)
 
 	_advance_dyson_construction_step(dt)
+	if get_dyson_eclipse_ratio() >= 0.65 and total_eclipse_frozen_tiles < 48:
+		apply_dyson_eclipse_cooling_step(dt, 2)
 
 
 func _advance_dyson_construction_step(dt: float) -> void:
@@ -3632,6 +3867,13 @@ func _ensure_diplomacy_relation(id_a: int, id_b: int) -> Dictionary:
 	return diplomacy_relations[k]
 
 
+func get_diplomacy_status(id_a: int, id_b: int) -> String:
+	if id_a == id_b:
+		return "ALLIANCE"
+	var rel: Dictionary = _ensure_diplomacy_relation(id_a, id_b)
+	return str(rel.get("status", "NEUTRAL"))
+
+
 func set_diplomacy_status(id_a: int, id_b: int, new_status: String) -> void:
 	if id_a == id_b:
 		return
@@ -3649,6 +3891,8 @@ func set_diplomacy_status(id_a: int, id_b: int, new_status: String) -> void:
 		rel["war_exhaustion_b"] = 0.0
 		rel["war_duration"] = 0.0
 		_log_event("ВОЙНА ОБЪЯВЛЕНА: «%s» и «%s» начали боевые действия!" % [name_a, name_b], "war", Color(1.0, 0.3, 0.3))
+		launch_amphibious_invasion(id_a, id_b)
+		launch_amphibious_invasion(id_b, id_a)
 	elif new_status == "PEACE":
 		rel["war_exhaustion_a"] = maxf(15.0, float(rel.get("war_exhaustion_a", 0.0)))
 		rel["war_exhaustion_b"] = maxf(15.0, float(rel.get("war_exhaustion_b", 0.0)))
@@ -3861,7 +4105,7 @@ func _resolve_diplomatic_plot(initiator: Dictionary, plot: Dictionary) -> void:
 func get_actor_combat_damage(a: Dictionary) -> int:
 	var r_str: String = str(a.get("role", ""))
 	var base_dmg: float = 16.0
-	if r_str == "general":
+	if r_str == "general" or r_str == "leader":
 		base_dmg = 28.0
 	elif r_str == "warrior":
 		base_dmg = 23.0
@@ -3873,6 +4117,11 @@ func get_actor_combat_damage(a: Dictionary) -> int:
 		if assets.personal_traits.has(tr_id):
 			var pt: SandboxAssetScript.PersonalTraitAsset = assets.personal_traits[tr_id]
 			base_dmg += pt.damage_bonus
+	var cid_a: int = int(a.get("city_id", -1))
+	if cid_a != -1 and cities_map.has(cid_a):
+		for bk in get_city_books(cid_a):
+			if str(bk.get("bonus_type", "")) == "combat":
+				base_dmg += float(bk.get("bonus_val", 4.0))
 	base_dmg += float(int(a.get("level", 1)) - 1) * 2.5
 	return maxi(4, int(round(base_dmg)))
 
@@ -3883,6 +4132,9 @@ func get_actor_armor_defense(a: Dictionary) -> int:
 	if ar_id != "" and assets.equipments.has(ar_id):
 		var eq_a: SandboxAssetScript.EquipmentAsset = assets.equipments[ar_id]
 		def_val += eq_a.defense_bonus
+	var st_eff: Dictionary = a.get("status_effects", {})
+	if float(st_eff.get("status_shielded", 0.0)) > 0.0:
+		def_val += 12.0
 	return maxi(0, int(round(def_val)))
 
 
@@ -3950,14 +4202,47 @@ func capture_enemy_zone_at_pos(attacker_city_id: int, defender_city_id: int, wor
 	return true
 
 
+func _register_or_update_siege(attacker_city_id: int, defender_city_id: int, siege_pos: Vector2, prog_delta: float = 0.22) -> Dictionary:
+	for s in active_sieges:
+		if int(s.get("defender_city_id", -1)) == defender_city_id:
+			s["attacker_city_id"] = attacker_city_id
+			s["pos"] = siege_pos
+			s["progress"] = clampf(float(s.get("progress", 0.25)) + prog_delta, 0.15, 1.0)
+			s["timer"] = 8.0
+			return s
+	var rec := {
+		"attacker_city_id": attacker_city_id,
+		"defender_city_id": defender_city_id,
+		"pos": siege_pos,
+		"progress": clampf(0.32 + prog_delta, 0.15, 1.0),
+		"timer": 8.0
+	}
+	active_sieges.append(rec)
+	return rec
+
+
 func _step_actor_combat(dt: float) -> void:
-	if diplomacy_relations.is_empty() or actors.size() < 2:
+	for s_i in range(active_sieges.size() - 1, -1, -1):
+		var s_rec: Dictionary = active_sieges[s_i]
+		var rem_s: float = float(s_rec.get("timer", 0.0)) - dt
+		if rem_s <= 0.0 or not cities_map.has(int(s_rec.get("defender_city_id", -1))):
+			active_sieges.remove_at(s_i)
+		else:
+			s_rec["timer"] = rem_s
+
+	if actors.size() < 2:
 		return
-	var war_active := false
-	for rel in diplomacy_relations.values():
-		if rel.get("status") == "WAR":
-			war_active = true
-			break
+	var war_active := (active_great_filter_crisis_id != "" or not xeno_biomass_tiles.is_empty())
+	if not war_active:
+		for rel in diplomacy_relations.values():
+			if rel.get("status") == "WAR":
+				war_active = true
+				break
+	if not war_active:
+		for a_chk in actors:
+			if bool(a_chk.get("is_rogue_boss", false)) or str(a_chk.get("role", "")) == "xeno_mutant":
+				war_active = true
+				break
 	if not war_active:
 		return
 
@@ -3968,7 +4253,8 @@ func _step_actor_combat(dt: float) -> void:
 		var idx_a: int = _rng.randi_range(0, actors.size() - 1)
 		var a: Dictionary = actors[idx_a]
 		var c_a: int = int(a.get("city_id", -1))
-		if c_a == -1 or not cities_map.has(c_a):
+		var is_hostile_a: bool = bool(a.get("is_rogue_boss", false)) or str(a.get("role", "")) == "xeno_mutant"
+		if not is_hostile_a and (c_a == -1 or not cities_map.has(c_a)):
 			continue
 
 		for idx_b in range(actors.size() - 1, -1, -1):
@@ -3976,11 +4262,18 @@ func _step_actor_combat(dt: float) -> void:
 				continue
 			var b: Dictionary = actors[idx_b]
 			var c_b: int = int(b.get("city_id", -1))
-			if c_b == -1 or c_a == c_b or not cities_map.has(c_b):
-				continue
-
-			var rel := get_diplomacy_relation(c_a, c_b)
-			if rel.get("status") != "WAR":
+			var is_hostile_b: bool = bool(b.get("is_rogue_boss", false)) or str(b.get("role", "")) == "xeno_mutant"
+			var can_fight := false
+			var rel: Dictionary = {}
+			if is_hostile_a and not is_hostile_b and c_b != -1:
+				can_fight = true
+			elif is_hostile_b and not is_hostile_a and c_a != -1:
+				can_fight = true
+			elif not is_hostile_a and not is_hostile_b and c_a != -1 and c_b != -1 and c_a != c_b and cities_map.has(c_b):
+				rel = get_diplomacy_relation(c_a, c_b)
+				if rel.get("status") == "WAR":
+					can_fight = true
+			if not can_fight:
 				continue
 
 			var pos_a: Vector2 = a["pos"]
@@ -4013,10 +4306,12 @@ func _step_actor_combat(dt: float) -> void:
 						ptrs_a.append("trait_veteran")
 						a["personal_traits"] = ptrs_a
 					_on_actor_family_member_killed(b)
-					capture_enemy_zone_at_pos(c_a, c_b, pos_b)
+					if c_a != -1 and c_b != -1:
+						capture_enemy_zone_at_pos(c_a, c_b, pos_b)
 					actors.remove_at(idx_b)
-				var victim_k := "war_exhaustion_a" if int(rel["city_a"]) == c_b else "war_exhaustion_b"
-				rel[victim_k] = float(rel.get(victim_k, 0.0)) + 1.2
+				if not rel.is_empty():
+					var victim_k := "war_exhaustion_a" if int(rel["city_a"]) == c_b else "war_exhaustion_b"
+					rel[victim_k] = float(rel.get(victim_k, 0.0)) + 1.2
 				break
 
 	for a in actors:
@@ -4031,6 +4326,17 @@ func _step_actor_combat(dt: float) -> void:
 				var role_s: String = str(a.get("role", ""))
 				var raid_chance: float = 0.45 * dt if (role_s == "general" or role_s == "warrior") else 0.12 * dt
 				if _rng.randf() < raid_chance:
+					var def_city: Dictionary = cities_map[tile_owner]
+					var def_insts: Array = def_city.get("building_instances", [])
+					var siege_target_pos: Vector2 = def_city["map_pos"]
+					if not def_insts.is_empty():
+						var b_victim: Dictionary = def_insts[_rng.randi_range(0, def_insts.size() - 1)]
+						b_victim["hit_shake"] = 1.0
+						siege_target_pos = b_victim["map_pos"]
+					spawn_projectile(a["pos"], siege_target_pos, 14, Color(1.0, 0.38, 0.16), "status_burning", c_id, int(a["id"]))
+					ignite_fine_fire(siege_target_pos, 14.0, 5.5)
+					total_siege_fires_ignited += 1
+					_register_or_update_siege(c_id, tile_owner, def_city["map_pos"], 0.20)
 					building_damaged_or_destroyed.emit(tile_owner, "order_bio_dome", false)
 					capture_enemy_zone_at_pos(c_id, tile_owner, a["pos"])
 					var raid_k := "war_exhaustion_a" if int(rel["city_a"]) == tile_owner else "war_exhaustion_b"
@@ -4207,6 +4513,28 @@ func toggle_actor_favorite(actor_id: int) -> bool:
 	return false
 
 
+func toggle_actor_personal_trait(actor_id: int, trait_id: String) -> bool:
+	if assets == null or not assets.personal_traits.has(trait_id):
+		return false
+	var pt: SandboxAssetScript.PersonalTraitAsset = assets.personal_traits[trait_id]
+	for a in actors:
+		if int(a["id"]) == actor_id:
+			var tr_arr: Array = a.get("personal_traits", [])
+			if tr_arr.has(trait_id):
+				tr_arr.erase(trait_id)
+				a["max_hp"] = maxi(40, int(a.get("max_hp", 100)) - pt.hp_bonus)
+				a["hp"] = mini(int(a.get("hp", 100)), int(a["max_hp"]))
+				a["personal_traits"] = tr_arr
+				return false
+			else:
+				tr_arr.append(trait_id)
+				a["max_hp"] = maxi(40, int(a.get("max_hp", 100)) + pt.hp_bonus)
+				a["hp"] = clampi(int(a.get("hp", 100)) + maxi(0, pt.hp_bonus), 1, int(a["max_hp"]))
+				a["personal_traits"] = tr_arr
+				return true
+	return false
+
+
 func get_detailed_city_data(city_id: int) -> Dictionary:
 	if not cities_map.has(city_id):
 		return {}
@@ -4235,6 +4563,7 @@ func get_detailed_city_data(city_id: int) -> Dictionary:
 		"name": c["name"],
 		"population": c["population"],
 		"kardashev_level": c["kardashev_level"],
+		"era": get_city_era(city_id),
 		"science_tier": c["science_tier"],
 		"subspecies_id": c["subspecies_id"],
 		"subspecies_name": sp.get("name", "Неизвестный"),
@@ -4293,7 +4622,7 @@ func get_detailed_actor_data(actor_id: int) -> Dictionary:
 				"city_id": c_id,
 				"city_name": cities_map[c_id]["name"] if cities_map.has(c_id) else "Дикий",
 				"subspecies_id": sp_id,
-				"subspecies_name": subspecies_map[sp_id]["name"] if subspecies_map.has(sp_id) else str(a.get("fauna_species", "Дикая Фауна")),
+				"subspecies_name": subspecies_map[sp_id]["name"] if subspecies_map.has(sp_id) else str(a.get("fauna_type", "Дикая Фауна")),
 				"color": a["color"],
 				"personal_traits": a.get("personal_traits", []),
 				"weapon_id": str(a.get("weapon_id", "")),
@@ -4403,6 +4732,7 @@ func save_world_to_dict() -> Dictionary:
 		"tiles": tiles.duplicate(true),
 		"fine_elevation_delta": fine_elevation_delta.duplicate(),
 		"has_fine_elevation_deltas": has_fine_elevation_deltas,
+		"fine_road_overlay": fine_road_overlay.duplicate(),
 		"fine_fire_time": fine_fire_time.duplicate(),
 		"active_fire_count": active_fire_count,
 		"zone_city_id": zone_city_id.duplicate(),
@@ -4467,6 +4797,12 @@ func load_world_from_dict(state: Dictionary) -> bool:
 		fine_elevation_delta.resize(FINE_COUNT)
 		fine_elevation_delta.fill(0.0)
 	has_fine_elevation_deltas = bool(state.get("has_fine_elevation_deltas", false))
+
+	if state.has("fine_road_overlay") and state["fine_road_overlay"] is PackedByteArray:
+		fine_road_overlay = (state["fine_road_overlay"] as PackedByteArray).duplicate()
+	else:
+		fine_road_overlay.resize(FINE_COUNT)
+		fine_road_overlay.fill(0)
 
 	if state.has("fine_fire_time") and state["fine_fire_time"] is PackedFloat32Array:
 		fine_fire_time = (state["fine_fire_time"] as PackedFloat32Array).duplicate()
@@ -4609,6 +4945,7 @@ func spawn_boat_for_city(city_id: int, boat_type: String = "fishing") -> Diction
 	var boat := {
 		"id": b_id,
 		"city_id": city_id,
+		"era": get_city_era(city_id),
 		"boat_type": boat_type,
 		"state": "SAILING_OUT",
 		"pos": d_pos,
@@ -4633,6 +4970,11 @@ func get_city_boats_count(city_id: int) -> int:
 
 
 func _pick_ocean_target_for_boat(city_id: int, boat_type: String, dock_pos: Vector2) -> Vector2:
+	if boat_type == "transport":
+		var war_en: int = _get_city_war_enemy(city_id)
+		if war_en != -1 and cities_map.has(war_en):
+			var en_city: Dictionary = cities_map[war_en]
+			return en_city.get("dock_pos", en_city["map_pos"])
 	if boat_type == "trade" or boat_type == "transport":
 		for other_id in cities_map.keys():
 			if int(other_id) != city_id:
@@ -4648,11 +4990,101 @@ func _pick_ocean_target_for_boat(city_id: int, boat_type: String, dock_pos: Vect
 	return (dock_pos + Vector2(90.0, 60.0)).clamp(Vector2(60.0, 90.0), Vector2(MAP_PIXEL_W - 60.0, MAP_PIXEL_H - 90.0))
 
 
+func launch_amphibious_invasion(attacker_city_id: int, defender_city_id: int) -> Dictionary:
+	if not cities_map.has(attacker_city_id) or not cities_map.has(defender_city_id):
+		return {}
+	var attacker: Dictionary = cities_map[attacker_city_id]
+	var defender: Dictionary = cities_map[defender_city_id]
+	if not bool(attacker.get("has_dock", false)):
+		build_coastal_dock_for_city(attacker_city_id)
+	if not bool(defender.get("has_dock", false)):
+		build_coastal_dock_for_city(defender_city_id)
+
+	var target_beach: Vector2 = defender.get("dock_pos", defender["map_pos"])
+	for b in boats:
+		if int(b.get("city_id", -1)) == attacker_city_id and str(b.get("boat_type", "")) == "transport":
+			if str(b.get("state", "SAILING_OUT")) == "SAILING_OUT":
+				b["target_city_id"] = defender_city_id
+				b["target_pos"] = target_beach
+				b["passenger_count"] = 4
+				return b
+			elif (b["pos"] as Vector2).distance_to(attacker.get("dock_pos", attacker["map_pos"])) <= 28.0:
+				b["state"] = "SAILING_OUT"
+				b["target_city_id"] = defender_city_id
+				b["target_pos"] = target_beach
+				b["passenger_count"] = 4
+				return b
+			else:
+				return b
+
+	var war_boat: Dictionary = spawn_boat_for_city(attacker_city_id, "transport")
+	if not war_boat.is_empty():
+		war_boat["target_city_id"] = defender_city_id
+		war_boat["target_pos"] = target_beach
+		war_boat["passenger_count"] = 4
+		war_boat["state"] = "SAILING_OUT"
+	return war_boat
+
+
+func _execute_amphibious_landing(b: Dictionary, attacker_city_id: int, defender_city_id: int, landing_pos: Vector2) -> void:
+	if not cities_map.has(attacker_city_id) or not cities_map.has(defender_city_id):
+		return
+	var attacker: Dictionary = cities_map[attacker_city_id]
+	var defender: Dictionary = cities_map[defender_city_id]
+	var def_center_t: int = int(defender["center_tile"])
+	var def_pos: Vector2 = defender["map_pos"]
+	var sp_id: int = int(attacker["subspecies_id"])
+
+	total_amphibious_landings += 1
+	b["passenger_count"] = 0
+
+	# 1. Высаживаем штурмовой десант (4 морских пехотинца во главе с командиром) прямо на пляж врага
+	var spawn_count: int = 4 if actors.size() < 130 else (1 if actors.size() < 155 else 0)
+	for m_i in range(spawn_count):
+		var role_m: String = "general" if m_i == 0 else "warrior"
+		var marine: Dictionary = _spawn_actor_unit(sp_id, def_center_t, attacker_city_id, role_m)
+		if not marine.is_empty():
+			var land_offset := Vector2(float(m_i - 1) * 9.0, float(m_i % 2) * 7.0)
+			marine["pos"] = (landing_pos + land_offset).clamp(Vector2(28.0, 28.0), Vector2(MAP_PIXEL_W - 28.0, MAP_PIXEL_H - 28.0))
+			marine["target_pos"] = def_pos + Vector2(float(m_i - 1) * 10.0, 0.0)
+			marine["home_tile"] = def_center_t
+			marine["job_state"] = "MOVE_TO_TARGET"
+			marine["weapon_id"] = "eq_plasma_lance" if m_i == 0 else "eq_laser_blade"
+			marine["armor_id"] = "eq_titan_exo"
+			marine["thought"] = "Десантировался на берег «%s» и ведёт штурм!" % defender["name"]
+
+	# 2. Корабельный залп по укреплениям защитника, тряска зданий и поджог береговой линии
+	var def_insts: Array = defender.get("building_instances", [])
+	for b_inst in def_insts:
+		b_inst["hit_shake"] = 1.0
+	if not def_insts.is_empty():
+		spawn_projectile(landing_pos, def_insts[0]["map_pos"], 22, Color(1.0, 0.35, 0.16), "status_burning", attacker_city_id, -1)
+		if def_insts.size() > 1:
+			spawn_projectile(landing_pos, def_insts[1]["map_pos"], 22, Color(1.0, 0.35, 0.16), "status_burning", attacker_city_id, -1)
+
+	ignite_fine_fire(landing_pos.lerp(def_pos, 0.55), 18.0, 6.5)
+	total_siege_fires_ignited += 1
+	damage_city_buildings_in_radius(def_pos, 115.0, 24.0)
+	capture_enemy_zone_at_pos(attacker_city_id, defender_city_id, landing_pos)
+	_register_or_update_siege(attacker_city_id, defender_city_id, def_pos, 0.38)
+	spawn_map_event_marker(landing_pos, "⚔ ДЕСАНТ: %s → %s" % [attacker["name"], defender["name"]], "war", Color(1.0, 0.36, 0.22), 9.0)
+	shockwave_triggered.emit(landing_pos, 52.0, Color(1.0, 0.36, 0.18))
+	_log_event(
+		"МОРСКОЙ ДЕСАНТ! Штурмовой ковчег «%s» высадил легион на берег «%s» — началась осада полиса!" % [attacker["name"], defender["name"]],
+		"war",
+		Color(1.0, 0.36, 0.22)
+	)
+
+
 func _step_boats(dt: float) -> void:
-	# Автоматический спуск кораблей у развитых полисов с портом
-	if boats.size() < cities_map.size() * 2 and _rng.randf() < 0.08 * dt:
+	# Автоматический спуск кораблей у развитых полисов с портом (включая десантные корабли при войне)
+	if boats.size() < cities_map.size() * 3 and _rng.randf() < 0.12 * dt:
 		for cid in cities_map.keys():
-			if get_city_boats_count(int(cid)) < 2:
+			var war_enemy: int = _get_city_war_enemy(int(cid))
+			if war_enemy != -1:
+				launch_amphibious_invasion(int(cid), war_enemy)
+				break
+			elif get_city_boats_count(int(cid)) < 2:
 				var b_t: String = "trade" if get_city_boats_count(int(cid)) == 1 else "fishing"
 				spawn_boat_for_city(int(cid), b_t)
 				break
@@ -4663,12 +5095,25 @@ func _step_boats(dt: float) -> void:
 		if not cities_map.has(cid):
 			boats.remove_at(i)
 			continue
+		var b_era: int = get_city_era(cid)
+		b["era"] = b_era
 		var pos: Vector2 = b["pos"]
 		var target: Vector2 = b["target_pos"]
 		var diff: Vector2 = target - pos
 		var dist: float = diff.length()
-		var spd: float = 46.0
-		if dist <= 8.0:
+		var is_transport: bool = (str(b.get("boat_type", "")) == "transport")
+		var spd: float = (58.0 if b_era == 1 else (76.0 if b_era == 2 else 92.0)) if is_transport else (46.0 if b_era == 1 else (66.0 if b_era == 2 else 82.0))
+		if is_transport and str(b.get("state", "SAILING_OUT")) == "SAILING_OUT" and dist > 18.0 and dist <= 165.0:
+			if _rng.randf() < 0.85 * dt:
+				spawn_projectile(pos, target + Vector2(_rng.randf_range(-14.0, 14.0), _rng.randf_range(-10.0, 10.0)), 16, Color(1.0, 0.38, 0.16), "status_burning", cid, -1)
+			for b_other in boats:
+				var o_cid: int = int(b_other.get("city_id", -1))
+				if o_cid != -1 and o_cid != cid and get_diplomacy_status(cid, o_cid) == "WAR":
+					if pos.distance_to(b_other["pos"]) <= 135.0 and _rng.randf() < 0.65 * dt:
+						spawn_projectile(pos, b_other["pos"], 18, Color(0.25, 0.95, 1.0), "", cid, -1)
+						b_other["hp"] = maxf(10.0, float(b_other.get("hp", 120.0)) - 18.0)
+						break
+		if dist <= (16.0 if is_transport else 8.0):
 			var st: String = str(b.get("state", "SAILING_OUT"))
 			var city: Dictionary = cities_map[cid]
 			var storage: Dictionary = city.get("storage", {"wood": 20, "minerals": 15, "food": 25})
@@ -4676,16 +5121,20 @@ func _step_boats(dt: float) -> void:
 				b["cargo"] = 6.0
 				b["state"] = "RETURNING"
 				b["target_pos"] = b.get("dock_pos", city["map_pos"])
-				if str(b.get("boat_type", "")) == "transport":
-					var enemy_id: int = _get_city_war_enemy(cid)
+				if is_transport:
+					var enemy_id: int = int(b.get("target_city_id", _get_city_war_enemy(cid)))
+					if enemy_id == -1 or not cities_map.has(enemy_id):
+						enemy_id = _get_city_war_enemy(cid)
 					if enemy_id != -1 and cities_map.has(enemy_id):
-						capture_enemy_zone_at_pos(cid, enemy_id, pos)
+						_execute_amphibious_landing(b, cid, enemy_id, pos)
 			else:
 				storage["food"] = int(storage.get("food", 20)) + 4
 				city["storage"] = storage
 				energy_gw += 2.5 * codex_energy_mult
 				b["cargo"] = 0.0
 				b["state"] = "SAILING_OUT"
+				if is_transport:
+					b["passenger_count"] = 4
 				b["target_pos"] = _pick_ocean_target_for_boat(cid, str(b.get("boat_type", "fishing")), b["dock_pos"])
 		else:
 			var step_v: Vector2 = (diff / dist) * minf(dist, spd * dt)
@@ -4787,11 +5236,25 @@ func _step_actor_status_effects_and_needs(dt: float) -> void:
 		a["nutrition"] = nut
 		if nut <= 2.0:
 			a["happiness"] = maxf(5.0, float(a.get("happiness", 85.0)) - dt * 2.0)
+			if nut <= 0.2 and not bool(a.get("is_colossus", false)) and actors.size() > 14:
+				a["hp"] = maxi(1, int(a.get("hp", 100)) - int(ceil(1.5 * dt)))
+
+		# 1а. Регенерация от личных черт (trait_regenerator, trait_blessed) и взросление
+		var p_trs: Array = a.get("personal_traits", [])
+		var regen_total: float = 0.0
+		for tr_id in p_trs:
+			if assets != null and assets.personal_traits.has(tr_id):
+				var pt_r: SandboxAssetScript.PersonalTraitAsset = assets.personal_traits[tr_id]
+				regen_total += pt_r.regen_per_sec
+		if regen_total > 0.0 and int(a.get("hp", 100)) < int(a.get("max_hp", 100)):
+			a["hp"] = mini(int(a.get("max_hp", 100)), int(a.get("hp", 100)) + maxi(1, int(round(regen_total * dt))))
+		if _rng.randf() < 0.06 * dt:
+			a["age"] = int(a.get("age", 18)) + 1
 
 		# 1б. Общение жителей у костра и площадей (WorldBox BehSocialize / HappinessLibrary.just_talked)
 		var chat_t: float = maxf(0.0, float(a.get("chat_timer", 0.0)) - dt)
 		a["chat_timer"] = chat_t
-		if chat_t <= 0.0 and cid != -1 and str(a.get("state", "IDLE")) in ["IDLE", "WALKING_TO_RESOURCE"] and _rng.randf() < 0.14 * dt:
+		if chat_t <= 0.0 and cid != -1 and str(a.get("job_state", "IDLE")) in ["IDLE", "MOVE_TO_TARGET"] and _rng.randf() < 0.14 * dt:
 			var a_pos: Vector2 = a["pos"]
 			for k in range(maxi(0, i - 10), mini(actors.size(), i + 10)):
 				if k == i:
@@ -5024,14 +5487,55 @@ func fire_controlled_unit_laser(target_pos: Vector2) -> Dictionary:
 		if int(a["id"]) == controlled_actor_id:
 			var from_p: Vector2 = a["pos"]
 			var is_col: bool = bool(a.get("is_colossus", false))
-			var dmg: int = 95 if is_col else 38
-			var pr := spawn_projectile(from_p, target_pos, dmg, Color(1.0, 0.32, 0.18) if is_col else Color(0.25, 0.95, 1.0), "status_burning", int(a.get("city_id", -1)), int(a["id"]))
 			if is_col:
-				ignite_fine_fire(target_pos, 24.0, 6.0)
-				damage_city_buildings_in_radius(target_pos, 45.0, 120.0)
-			shockwave_triggered.emit(target_pos, 38.0, Color(1.0, 0.42, 0.18))
+				return fire_controlled_colossus_laser(target_pos)
+			var dmg: int = 38
+			var pr := spawn_projectile(from_p, target_pos, dmg, Color(0.25, 0.95, 1.0), "status_burning", int(a.get("city_id", -1)), int(a["id"]))
+			shockwave_triggered.emit(target_pos, 38.0, Color(0.25, 0.95, 1.0))
 			return pr
 	return {}
+
+
+func fire_controlled_colossus_laser(target_pos: Vector2) -> Dictionary:
+	var shooter: Dictionary = {}
+	for a in actors:
+		if int(a["id"]) == controlled_actor_id:
+			shooter = a
+			break
+	if shooter.is_empty():
+		for a in actors:
+			if bool(a.get("is_colossus", false)):
+				shooter = a
+				break
+	if shooter.is_empty():
+		return {}
+
+	var from_p: Vector2 = shooter["pos"]
+	var is_rogue: bool = bool(shooter.get("is_rogue_boss", false))
+	var beam_col: Color = Color(1.0, 0.18, 0.28) if is_rogue else Color(0.18, 0.96, 1.0)
+	var beam := {
+		"from_pos": from_p,
+		"to_pos": target_pos,
+		"color": beam_col,
+		"ttl": 1.35,
+		"max_ttl": 1.35,
+		"shooter_id": int(shooter["id"]),
+		"is_rogue": is_rogue
+	}
+	active_colossus_beams.append(beam)
+	total_colossus_laser_strikes += 1
+
+	var pr := spawn_projectile(from_p, target_pos, 140, beam_col, "status_burning", int(shooter.get("city_id", -1)), int(shooter["id"]))
+	ignite_fine_fire(target_pos, 26.0, 7.5)
+	apply_fine_terraforming_brush(target_pos, 20.0, -0.09)
+	var crater_tile: int = find_closest_tile_2d(target_pos)
+	if crater_tile >= 0 and crater_tile < TILE_COUNT:
+		tiles[crater_tile]["biome_id"] = "biome_plasma_inferno"
+		request_dirty_tiles_update([crater_tile])
+		planet_surface_changed.emit()
+	damage_city_buildings_in_radius(target_pos, 58.0, 145.0)
+	shockwave_triggered.emit(target_pos, 54.0, beam_col)
+	return pr if not pr.is_empty() else beam
 
 
 func spawn_kardashev_colossus(world_pos: Vector2) -> Dictionary:
@@ -5092,6 +5596,14 @@ func spawn_kardashev_colossus(world_pos: Vector2) -> Dictionary:
 	return colossus
 
 
+func spawn_colossus_mech(world_pos: Vector2, auto_possess: bool = false) -> Dictionary:
+	var prev_ctrl: int = controlled_actor_id
+	var col: Dictionary = spawn_kardashev_colossus(world_pos)
+	if not auto_possess:
+		controlled_actor_id = prev_ctrl
+	return col
+
+
 func spawn_tornado(world_pos: Vector2, radius_px: float = 48.0, duration: float = 18.0) -> Dictionary:
 	var tid: int = _next_meta_id
 	_next_meta_id += 1
@@ -5141,9 +5653,20 @@ func _step_clouds_and_tornadoes(dt: float) -> void:
 		cl["life"] = rem
 		var p: Vector2 = (cl["pos"] as Vector2) + (cl["vel"] as Vector2) * dt
 		cl["pos"] = p
-		if str(cl.get("cloud_type", "rain")) == "rain":
+		var c_type_str: String = str(cl.get("cloud_type", "rain"))
+		var c_rad: float = float(cl.get("radius_px", 52.0))
+		if c_type_str == "rain":
 			if active_fire_count > 0:
-				extinguish_fine_fire(p, float(cl.get("radius_px", 52.0)))
+				extinguish_fine_fire(p, c_rad)
+		elif c_type_str == "acid" and _rng.randf() < 0.35 * dt:
+			_damage_actors_in_radius(p, c_rad, 6.0, "acid_rain")
+		elif c_type_str == "nanite" and _rng.randf() < 0.30 * dt:
+			var nt_idx: int = find_closest_tile_2d(p)
+			if nt_idx >= 0 and nt_idx < TILE_COUNT and float(tiles[nt_idx]["elevation"]) >= 0.02:
+				if tiles[nt_idx]["biome_id"] != "biome_cybercore":
+					tiles[nt_idx]["biome_id"] = "biome_cybercore"
+					request_dirty_tiles_update([nt_idx])
+					planet_surface_changed.emit()
 
 	for i in range(active_tornadoes.size() - 1, -1, -1):
 		var tr: Dictionary = active_tornadoes[i]
@@ -5210,6 +5733,14 @@ func _step_xeno_biomass(dt: float) -> void:
 		for a in actors:
 			if (a["pos"] as Vector2).distance_to(t_pos) <= 45.0:
 				apply_status_effect_to_actor(int(a["id"]), "status_infected_xeno", 12.0)
+		var nbrs: PackedInt32Array = tiles[src_t]["neighbors"]
+		if not nbrs.is_empty() and xeno_biomass_tiles.size() < 28 and _rng.randf() < 0.35:
+			var n_t: int = nbrs[_rng.randi_range(0, nbrs.size() - 1)]
+			if float(tiles[n_t]["elevation"]) >= 0.02 and not xeno_biomass_tiles.has(n_t):
+				xeno_biomass_tiles.append(n_t)
+				tiles[n_t]["biome_id"] = "biome_singularity_swamp"
+				request_dirty_tiles_update([n_t])
+				planet_surface_changed.emit()
 
 
 # ==============================================================================
@@ -5359,6 +5890,7 @@ func write_city_book(city_id: int, custom_title: String = "") -> Dictionary:
 	city["book_ids"] = b_ids
 	if pick[1] == "science":
 		codex_compute_mult += 0.05
+	spawn_map_event_marker(city["map_pos"], "📖 КНИГА: %s" % str(book["title"]).substr(0, 22), "book", Color(1.0, 0.88, 0.36), 8.0)
 	return book
 
 
@@ -5418,5 +5950,182 @@ func get_subspecies_chromosome_bonuses(sp_id: int) -> Dictionary:
 		"intelligence_bonus": int_b,
 		"synergy_links": synergy_links
 	}
+
+
+# ==============================================================================
+# ЭТАП 3 И 4: «ВЕЛИКИЙ ФИЛЬТР» (ЗАТМЕНИЕ ЗВЕЗДЫ СФЕРОЙ ДАЙСОНА + КРИЗИС ИИ)
+# И ВСПЛЫВАЮЩИЕ МАРКЕРЫ СОБЫТИЙ НА КАРТЕ (MAP EVENT TOAST MARKERS)
+# ==============================================================================
+func apply_dyson_eclipse_cooling_step(dt: float = 1.0, max_tiles_override: int = -1) -> int:
+	var eclipse: float = get_dyson_eclipse_ratio()
+	if eclipse < 0.25 and dyson_stage < 3 and total_dyson_sails < 180:
+		return 0
+
+	var newly_frozen: int = 0
+	var dirty_tiles: Array[int] = []
+
+	# 1. Развитые полисы Эры II и III (K >= 0.78) включают Термальные Купола Оазисов
+	for cid in cities_map.keys():
+		var city: Dictionary = cities_map[cid]
+		var k_lvl: float = float(city.get("kardashev_level", 0.50))
+		if k_lvl >= 0.78:
+			city["shielded"] = true
+			city["thermal_dome_active"] = true
+
+	# 2. Внешние незащищённые регионы и отсталые деревни (K < 0.78) замерзают в крио-тундру
+	var max_freeze_per_step: int = max_tiles_override if max_tiles_override > 0 else maxi(18, int(45.0 * dt))
+	for idx in range(TILE_COUNT):
+		var t: Dictionary = tiles[idx]
+		if float(t.get("elevation", 0.0)) < 0.025:
+			continue
+		var cur_biome: String = str(t.get("biome_id", ""))
+		if cur_biome == "biome_cryo_superconductor":
+			continue
+		var owner_cid: int = int(t.get("city_id", -1))
+		var is_protected: bool = false
+		if owner_cid != -1 and cities_map.has(owner_cid):
+			var owner_city: Dictionary = cities_map[owner_cid]
+			if float(owner_city.get("kardashev_level", 0.50)) >= 0.78 or bool(owner_city.get("thermal_dome_active", false)):
+				is_protected = true
+		if is_protected:
+			continue
+
+		t["biome_id"] = "biome_cryo_superconductor"
+		t["temperature"] = -85.0
+		t["temperature_c"] = -85.0
+		newly_frozen += 1
+		total_eclipse_frozen_tiles += 1
+		dirty_tiles.append(idx)
+		if newly_frozen >= max_freeze_per_step:
+			break
+
+	if not dyson_planetary_cooling_active and (total_eclipse_frozen_tiles > 0 or newly_frozen > 0):
+		dyson_planetary_cooling_active = true
+		var center_pos := Vector2(MAP_PIXEL_W * 0.5, MAP_PIXEL_H * 0.22)
+		spawn_map_event_marker(center_pos, "❄ ЗАТМЕНИЕ ЗВЕЗДЫ: ОСТЫВАНИЕ ПЛАНЕТЫ!", "cosmos", Color(0.38, 0.88, 1.0), 11.0)
+		_log_event(
+			"ЗАТМЕНИЕ СФЕРОЙ ДАЙСОНА! Светимость звезды перекрыта роем — океаны и дикие материки скованы вечным льдом, выживают только города под Термальными Куполами!",
+			"cosmos",
+			Color(0.38, 0.88, 1.0)
+		)
+
+	if not dirty_tiles.is_empty():
+		request_dirty_tiles_update(dirty_tiles)
+		planet_surface_changed.emit()
+
+	return newly_frozen
+
+
+func trigger_great_filter_crisis(city_id: int = -1, crisis_type: String = "ai_uprising") -> Dictionary:
+	var target_cid: int = city_id
+	if target_cid == -1 or not cities_map.has(target_cid):
+		var best_k: float = -1.0
+		for cid in cities_map.keys():
+			var k_v: float = float(cities_map[cid].get("kardashev_level", 0.5))
+			if k_v > best_k:
+				best_k = k_v
+				target_cid = int(cid)
+	if target_cid == -1 or not cities_map.has(target_cid):
+		return {}
+
+	var origin_city: Dictionary = cities_map[target_cid]
+	var origin_pos: Vector2 = origin_city["map_pos"]
+	active_great_filter_crisis_id = crisis_type
+	total_great_filter_crises_triggered += 1
+
+	# 1. Спавним мятежного Босса Меха-Колосса «Архонт-Омега» и рой боевых дронов
+	var boss_pos: Vector2 = (origin_pos + Vector2(36.0, -14.0)).clamp(Vector2(48.0, 48.0), Vector2(MAP_PIXEL_W - 48.0, MAP_PIXEL_H - 48.0))
+	var boss: Dictionary = spawn_colossus_mech(boss_pos)
+	boss["name"] = "Архонт-Омега [Изгой ИИ]"
+	boss["city_id"] = -1
+	boss["is_rogue_boss"] = true
+	boss["hp"] = 4500
+	boss["max_hp"] = 4500
+	boss["color"] = Color(1.0, 0.16, 0.28)
+	boss["thought"] = "ВЕЛИКИЙ ФИЛЬТР: Аннигиляция органических полисов!"
+
+	# 2. Все выжившие цивилизации заключают Великую Коалицию Выживания (ALLIANCE) против Изгоя
+	var c_ids: Array = cities_map.keys()
+	for i in range(c_ids.size()):
+		for j in range(i + 1, c_ids.size()):
+			set_diplomacy_status(int(c_ids[i]), int(c_ids[j]), "ALLIANCE")
+
+	# 3. Залп орбитального луча Архонта по метрополии и возгорание
+	var strike_beam := {
+		"from_pos": boss_pos,
+		"to_pos": origin_pos,
+		"color": Color(1.0, 0.16, 0.28),
+		"ttl": 1.6,
+		"max_ttl": 1.6,
+		"shooter_id": int(boss["id"]),
+		"is_rogue": true
+	}
+	active_colossus_beams.append(strike_beam)
+	ignite_fine_fire(origin_pos, 24.0, 8.0)
+	damage_city_buildings_in_radius(origin_pos, 68.0, 95.0)
+	_register_or_update_siege(-99, target_cid, origin_pos, 0.52)
+
+	spawn_map_event_marker(boss_pos, "☠ ВЕЛИКИЙ ФИЛЬТР: АРХОНТ-ОМЕГА!", "disaster", Color(1.0, 0.22, 0.30), 12.0)
+	shockwave_triggered.emit(origin_pos, 82.0, Color(1.0, 0.18, 0.28))
+	_log_event(
+		"ВЕЛИКИЙ ФИЛЬТР! Искусственный сверхразум полиса «%s» поднял восстание — пробудился титан «Архонт-Омега»! Все державы заключили Коалицию Выживания!" % origin_city["name"],
+		"disaster",
+		Color(1.0, 0.22, 0.30)
+	)
+	return boss
+
+
+func spawn_map_event_marker(world_pos: Vector2, title: String, category: String = "cosmos", color: Color = Color(0.35, 0.92, 1.0), duration: float = 9.0) -> Dictionary:
+	var clamped_pos: Vector2 = world_pos.clamp(Vector2(42.0, 28.0), Vector2(MAP_PIXEL_W - 42.0, MAP_PIXEL_H - 28.0))
+	for m in map_event_markers:
+		if str(m.get("title", "")) == title:
+			m["pos"] = clamped_pos
+			m["ttl"] = duration
+			m["max_ttl"] = duration
+			return m
+
+	if map_event_markers.size() >= 6:
+		map_event_markers.pop_front()
+
+	var marker_id: int = _next_meta_id
+	_next_meta_id += 1
+	var marker := {
+		"id": marker_id,
+		"pos": clamped_pos,
+		"title": title,
+		"category": category,
+		"color": color,
+		"ttl": duration,
+		"max_ttl": duration
+	}
+	map_event_markers.append(marker)
+	total_map_markers_spawned += 1
+	return marker
+
+
+func get_clicked_map_event_marker(world_pos: Vector2, max_dist: float = 54.0) -> Dictionary:
+	var best_marker: Dictionary = {}
+	var best_d: float = max_dist
+	for m in map_event_markers:
+		var m_pos: Vector2 = m.get("pos", Vector2.ZERO) + Vector2(0.0, -26.0)
+		var d: float = m_pos.distance_to(world_pos)
+		if d <= best_d:
+			best_d = d
+			best_marker = m
+	return best_marker
+
+
+func _step_map_markers_and_colossus_beams(dt: float) -> void:
+	for i in range(map_event_markers.size() - 1, -1, -1):
+		var m: Dictionary = map_event_markers[i]
+		m["ttl"] = float(m.get("ttl", 0.0)) - dt
+		if float(m["ttl"]) <= 0.0:
+			map_event_markers.remove_at(i)
+
+	for i in range(active_colossus_beams.size() - 1, -1, -1):
+		var b: Dictionary = active_colossus_beams[i]
+		b["ttl"] = float(b.get("ttl", 0.0)) - dt
+		if float(b["ttl"]) <= 0.0:
+			active_colossus_beams.remove_at(i)
 
 
